@@ -1079,3 +1079,36 @@ entry:
 ; CHECK-LABEL: @test71(
 ; CHECK: ret i32 %cond
 }
+
+define <4 x float> @add2f_0(<2 x float> %a0, <2 x float> %b0, <2 x float> %a1, <2 x float> %b1) {
+; CHECK-LABEL: @add2f_0
+; CHECK-NOT: select
+; CHECK: shufflevector <2 x float> %a0, <2 x float> %a1, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+; CHECK: shufflevector <2 x float> %b0, <2 x float> %b1, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+; CHECK: ret
+  %1 = shufflevector <2 x float> %a0, <2 x float> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %2 = shufflevector <2 x float> %a1, <2 x float> undef, <4 x i32> <i32 undef, i32 undef, i32 0, i32 1>
+  %3 = select <4 x i1> <i1 false, i1 false, i1 true, i1 true>, <4 x float> %2, <4 x float> %1
+  %4 = shufflevector <2 x float> %b0, <2 x float> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %5 = shufflevector <2 x float> %b1, <2 x float> undef, <4 x i32> <i32 undef, i32 undef, i32 0, i32 1>
+  %6 = select <4 x i1> <i1 false, i1 false, i1 true, i1 true>, <4 x float> %5, <4 x float> %4
+  %7 = fadd <4 x float> %3, %6
+  ret <4 x float> %7
+}
+
+;; This test might need to change if we implement the transform
+;; (shuffle (add x y) (add z w)) -> (add (shuffle x z) (shuffle y w))
+define <4 x float> @add2f_1(<2 x float> %a0, <2 x float> %b0, <2 x float> %a1, <2 x float> %b1) {
+; CHECK-LABEL: @add2f_1
+; CHECK-NOT: select
+; CHECK: [[ADD0:%[a-z0-9]+]] = fadd <2 x float> %a0, %b0
+; CHECK: [[ADD1:%[a-z0-9]+]] = fadd <2 x float> %a1, %b1
+; CHECK: [[RES:%[a-z0-9]+]] = shufflevector <2 x float> [[ADD0]], <2 x float> [[ADD1]], <4 x i32> <i32 0, i32 1, i32 2, i32 3>
+; CHECK: ret
+  %1 = fadd <2 x float> %a0, %b0
+  %2 = shufflevector <2 x float> %1, <2 x float> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>
+  %3 = fadd <2 x float> %a1, %b1
+  %4 = shufflevector <2 x float> %3, <2 x float> undef, <4 x i32> <i32 undef, i32 undef, i32 0, i32 1>
+  %5 = select <4 x i1> <i1 false, i1 false, i1 true, i1 true>, <4 x float> %4, <4 x float> %2
+  ret <4 x float> %5
+}

@@ -747,6 +747,63 @@ static Value *foldSelectICmpAnd(const SelectInst &SI, ConstantInt *TrueVal,
   return V;
 }
 
+static bool CanFoldSelectOfShuffleVectors(Value *CondVal, Value *TrueVal,
+                                          Value *FalseVal) {
+  VectorType *VecTy = dyn_cast<VectorType>(CondVal->getType());
+  ShuffleVectorInst *TrueSV = dyn_cast<ShuffleVectorInst>(TrueVal);
+  ShuffleVectorInst *FalseSV = dyn_cast<ShuffleVectorInst>(FalseVal);
+  if (!VecTy || !TrueSV || !FalseSV)
+    return false;
+
+  ConstantVector *CondV = dyn_cast<ConstantVector>(CondVal);
+  if (!CondV)
+    return false;
+
+  Value *TrueV2 = TrueSV->getOperand(1);
+  Value *FalseV2 = FalseSV->getOperand(1);
+  // We just check for *V2 being undef since instcombine will turn
+  // shufflevector(undef, v) into shufflevector(v, undef)
+  if (!isa<UndefValue>(TrueV2) || !isa<UndefValue>(FalseV2))
+    return false;
+
+  // The source vectors (not the mask) for the shuffle vectors have to
+  // have the same type. Otherwise we could end up trying to do a
+  // shufflevector <4 x i32> <2 x i32>
+  Type *TrueShuffleSrc = TrueV2->getType();
+  Type *FalseShuffleSrc = FalseV2->getType();
+  if (TrueShuffleSrc != FalseShuffleSrc)
+    return false;
+
+  return true;
+}
+
+// This is instruction is only safe to call if CanFoldSelectOfShuffleVectors is
+// true.
+static Instruction *FoldSelectOfShuffleVectors(SelectInst &SI) {
+  SmallVector<uint32_t, 16> ShuffleMask;
+  ShuffleVectorInst *Sources[] = { cast<ShuffleVectorInst>(SI.getFalseValue()),
+                                   cast<ShuffleVectorInst>(SI.getTrueValue()) };
+  ConstantVector *CondV = cast<ConstantVector>(SI.getCondition());
+
+  unsigned NumElems = cast<VectorType>(SI.getType())->getNumElements();
+  unsigned NumSourceElems =
+      cast<VectorType>(Sources[0]->getOperand(0)->getType())->getNumElements();
+  for (unsigned i = 0; i < NumElems; ++i) {
+    ConstantInt *Element = dyn_cast<ConstantInt>(CondV->getAggregateElement(i));
+    if (!Element)
+      return nullptr;
+
+    int Selector = Element->isOne();
+    int SourceIdx = Sources[Selector]->getMaskValue(i);
+    ShuffleMask.push_back(SourceIdx == -1 ? -1 : SourceIdx +
+                                                     NumSourceElems * Selector);
+  }
+
+  return new ShuffleVectorInst(
+      Sources[0]->getOperand(0), Sources[1]->getOperand(0),
+      ConstantDataVector::get(SI.getContext(), ShuffleMask));
+}
+
 Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
   Value *CondVal = SI.getCondition();
   Value *TrueVal = SI.getTrueValue();
@@ -1021,6 +1078,13 @@ Instruction *InstCombiner::visitSelectInst(SelectInst &SI) {
     if (isa<ConstantAggregateZero>(CondVal)) {
       return ReplaceInstUsesWith(SI, FalseVal);
     }
+
+    // If all the elements with true in the mask correspond to undef on
+    // FalseV, and the reverse is true with false in the mask and TrueV, we
+    // can merge the shufflevectors and remove the select.
+    if (CanFoldSelectOfShuffleVectors(CondVal, TrueVal, FalseVal))
+      if (Instruction *I = FoldSelectOfShuffleVectors(SI))
+        return I;
   }
 
   return nullptr;
