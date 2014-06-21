@@ -22772,6 +22772,77 @@ static SDValue combineShuffleToAddSub(SDNode *N, SelectionDAG &DAG) {
   return DAG.getNode(X86ISD::ADDSUB, DL, VT, LHS, RHS);
 }
 
+// Pre-conditions: V0 or V1 is a BUILD_VECTOR with one use.
+// This function merges a shuffle_vector of a BUILD_VECTOR into a
+// BUILD_VECTOR, if we're only using an element from the other argument of
+// the shuffle_vector
+static SDValue MergeVectorShuffleIntoBuildVector(ShuffleVectorSDNode *Op,
+                                                 SelectionDAG &DAG) {
+  SDLoc dl(Op);
+  MVT VT = Op->getSimpleValueType(0);
+  MVT EVT = VT.getVectorElementType();
+  SDValue V0 = Op->getOperand(0);
+  SDValue V1 = Op->getOperand(1);
+
+  unsigned V0Elems = 0, V1Elems = 0;
+
+  // 2 element shuffles should be easy to lower and don't need the added
+  // complexity to uncover patterns.
+  if (VT.getVectorNumElements() == 2)
+    return SDValue();
+
+  // Get a tally on how many elements come from each vector.
+  auto Mask = Op->getMask();
+  int NumElems = Mask.size();
+  for (int maskElem : Mask) {
+    if (maskElem == -1)
+      continue;
+    else if (maskElem < NumElems)
+      ++V0Elems;
+    else
+      ++V1Elems;
+  }
+
+  if (V0->getOpcode() == ISD::BUILD_VECTOR && V0->hasOneUse()) {
+    if (V1Elems != 1)
+      return SDValue();
+
+    SmallVector<SDValue, 8> NewBVElems;
+    for (int i = 0; i < NumElems; ++i) {
+      int From = Mask[i];
+      if (From == -1)
+        NewBVElems.push_back(DAG.getUNDEF(EVT));
+      else if (From < NumElems)
+        NewBVElems.push_back(V0->getOperand(From % NumElems));
+      else {
+        NewBVElems.push_back(DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, EVT, V1,
+                                         DAG.getIntPtrConstant(From)));
+      }
+    }
+
+    return DAG.getNode(ISD::BUILD_VECTOR, dl, VT, NewBVElems);
+  }
+
+  assert(V1->getOpcode() == ISD::BUILD_VECTOR && V1->hasOneUse());
+  if (V0Elems != 1)
+    return SDValue();
+
+  SmallVector<SDValue, 8> NewBVElems;
+  for (int i = 0; i < NumElems; ++i) {
+    int From = Mask[i];
+    if (From == -1)
+        NewBVElems.push_back(DAG.getUNDEF(EVT));
+    else if (From >= NumElems)
+      NewBVElems.push_back(V1->getOperand(From % NumElems));
+    else {
+      NewBVElems.push_back(DAG.getNode(ISD::EXTRACT_VECTOR_ELT, dl, EVT, V0,
+                                       DAG.getIntPtrConstant(From)));
+    }
+  }
+
+  return DAG.getNode(ISD::BUILD_VECTOR, dl, VT, NewBVElems);
+}
+
 /// PerformShuffleCombine - Performs several different shuffle combines.
 static SDValue PerformShuffleCombine(SDNode *N, SelectionDAG &DAG,
                                      TargetLowering::DAGCombinerInfo &DCI,
@@ -22851,6 +22922,15 @@ static SDValue PerformShuffleCombine(SDNode *N, SelectionDAG &DAG,
   // Only handle 128 wide vector from here on.
   if (!VT.is128BitVector())
     return SDValue();
+
+  if (((N0->getOpcode() == ISD::BUILD_VECTOR && N0->hasOneUse()) ||
+       (N1->getOpcode() == ISD::BUILD_VECTOR && N1->hasOneUse())) &&
+      N->getOpcode() == ISD::VECTOR_SHUFFLE) {
+    SDValue NewOp =
+        MergeVectorShuffleIntoBuildVector(cast<ShuffleVectorSDNode>(N), DAG);
+    if (NewOp.getNode())
+      return NewOp;
+  }
 
   // Combine a vector_shuffle that is equal to build_vector load1, load2, load3,
   // load4, <0, 1, 2, 3> into a 128-bit load if the load addresses are
