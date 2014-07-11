@@ -22803,6 +22803,12 @@ static SDValue MergeVectorShuffleIntoBuildVector(ShuffleVectorSDNode *Op,
       ++V1Elems;
   }
 
+  // Skip optimization if the shuffle is shuffling with a vector of all
+  // zeroes, since those cases are usually special.
+  if (ISD::isBuildVectorAllZeros(V1.getNode()) ||
+      ISD::isBuildVectorAllZeros(V0.getNode()))
+    return SDValue();
+
   if (V0->getOpcode() == ISD::BUILD_VECTOR && V0->hasOneUse()) {
     if (V1Elems != 1)
       return SDValue();
@@ -22831,7 +22837,7 @@ static SDValue MergeVectorShuffleIntoBuildVector(ShuffleVectorSDNode *Op,
   for (int i = 0; i < NumElems; ++i) {
     int From = Mask[i];
     if (From == -1)
-        NewBVElems.push_back(DAG.getUNDEF(EVT));
+      NewBVElems.push_back(DAG.getUNDEF(EVT));
     else if (From >= NumElems)
       NewBVElems.push_back(V1->getOperand(From % NumElems));
     else {
