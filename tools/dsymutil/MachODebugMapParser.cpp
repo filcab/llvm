@@ -107,13 +107,23 @@ ErrorOr<std::unique_ptr<DebugMap>> MachODebugMapParser::parse() {
   const MachOObjectFile &MainBinary = *MainBinOrError;
   loadMainBinarySymbols();
   Result = make_unique<DebugMap>();
-  MainBinaryStrings = MainBinary.getStringTableData();
+  auto BinaryStrings = MainBinary.getStringTableData();
+  if (std::error_code EC = BinaryStrings.getError())
+    return EC;
+  MainBinaryStrings = *BinaryStrings;
   for (const SymbolRef &Symbol : MainBinary.symbols()) {
     const DataRefImpl &DRI = Symbol.getRawDataRefImpl();
-    if (MainBinary.is64Bit())
-      handleStabDebugMapEntry(MainBinary.getSymbol64TableEntry(DRI));
-    else
-      handleStabDebugMapEntry(MainBinary.getSymbolTableEntry(DRI));
+    if (MainBinary.is64Bit()) {
+      auto STE = MainBinary.getSymbol64TableEntry(DRI);
+      if (std::error_code EC = STE.getError())
+        return EC;
+      handleStabDebugMapEntry(*STE);
+    } else {
+      auto STE = MainBinary.getSymbolTableEntry(DRI);
+      if (std::error_code EC = STE.getError())
+        return EC;
+      handleStabDebugMapEntry(*STE);
+    }
   }
 
   resetParserState();
@@ -208,12 +218,17 @@ void MachODebugMapParser::loadMainBinarySymbols() {
       continue;
     StringRef Name;
     uint64_t Addr;
+    uint32_t Flags;
     // The only symbols of interest are the global variables. These
     // are the only ones that need to be queried because the address
     // of common data won't be described in the debug map. All other
     // addresses should be fetched for the debug map.
+    std::error_code EC = Sym.getFlags(Flags);
+    if (EC)
+      report_fatal_error(EC.message());
+
     if (Sym.getAddress(Addr) || Addr == UnknownAddressOrSize ||
-        !(Sym.getFlags() & SymbolRef::SF_Global) || Sym.getSection(Section) ||
+        !(Flags & SymbolRef::SF_Global) || Sym.getSection(Section) ||
         Section->isText() || Sym.getName(Name) || Name.size() == 0 ||
         Name[0] == '\0')
       continue;

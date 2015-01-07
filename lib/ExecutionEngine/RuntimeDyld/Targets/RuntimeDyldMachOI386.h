@@ -150,7 +150,10 @@ private:
     uint32_t AddrA = Obj.getScatteredRelocationValue(RE);
     section_iterator SAI = getSectionByAddress(Obj, AddrA);
     assert(SAI != Obj.section_end() && "Can't find section for address A");
-    uint64_t SectionABase = SAI->getAddress();
+    uint64_t SectionABase;
+    std::error_code EC = SAI->getAddress(SectionABase);
+    if (EC)
+      report_fatal_error(EC.message());
     uint64_t SectionAOffset = AddrA - SectionABase;
     SectionRef SectionA = *SAI;
     bool IsCode = SectionA.isText();
@@ -160,7 +163,10 @@ private:
     uint32_t AddrB = Obj.getScatteredRelocationValue(RE2);
     section_iterator SBI = getSectionByAddress(Obj, AddrB);
     assert(SBI != Obj.section_end() && "Can't find section for address B");
-    uint64_t SectionBBase = SBI->getAddress();
+    uint64_t SectionBBase;
+    EC = SBI->getAddress(SectionBBase);
+    if (EC)
+      report_fatal_error(EC.message());
     uint64_t SectionBOffset = AddrB - SectionBBase;
     SectionRef SectionB = *SBI;
     uint32_t SectionBID =
@@ -206,7 +212,10 @@ private:
     unsigned SymbolBaseAddr = Obj.getScatteredRelocationValue(RE);
     section_iterator TargetSI = getSectionByAddress(Obj, SymbolBaseAddr);
     assert(TargetSI != Obj.section_end() && "Can't find section for symbol");
-    uint64_t SectionBaseAddr = TargetSI->getAddress();
+    uint64_t SectionBaseAddr;
+    std::error_code EC = TargetSI->getAddress(SectionBaseAddr);
+    if (EC)
+      report_fatal_error(EC.message());
     SectionRef TargetSection = *TargetSI;
     bool IsCode = TargetSection.isText();
     uint32_t TargetSectionID =
@@ -226,11 +235,15 @@ private:
     assert(!Obj.is64Bit() &&
            "__jump_table section not supported in 64-bit MachO.");
 
-    MachO::dysymtab_command DySymTabCmd = Obj.getDysymtabLoadCommand();
-    MachO::section Sec32 = Obj.getSection(JTSection.getRawDataRefImpl());
-    uint32_t JTSectionSize = Sec32.size;
-    unsigned FirstIndirectSymbol = Sec32.reserved1;
-    unsigned JTEntrySize = Sec32.reserved2;
+    auto DySymTabCmd = Obj.getDysymtabLoadCommand();
+    if (std::error_code EC = DySymTabCmd.getError())
+      report_fatal_error(EC.message());
+    auto Sec32 = Obj.getSection(JTSection.getRawDataRefImpl());
+    if (std::error_code EC = Sec32.getError())
+      report_fatal_error(EC.message());
+    uint32_t JTSectionSize = Sec32->size;
+    unsigned FirstIndirectSymbol = Sec32->reserved1;
+    unsigned JTEntrySize = Sec32->reserved2;
     unsigned NumJTEntries = JTSectionSize / JTEntrySize;
     uint8_t *JTSectionAddr = getSectionAddress(JTSectionID);
     unsigned JTEntryOffset = 0;
@@ -240,7 +253,7 @@ private:
 
     for (unsigned i = 0; i < NumJTEntries; ++i) {
       unsigned SymbolIndex =
-          Obj.getIndirectSymbolTableEntry(DySymTabCmd, FirstIndirectSymbol + i);
+          Obj.getIndirectSymbolTableEntry(*DySymTabCmd, FirstIndirectSymbol + i);
       symbol_iterator SI = Obj.getSymbolByIndex(SymbolIndex);
       StringRef IndirectSymbolName;
       SI->getName(IndirectSymbolName);

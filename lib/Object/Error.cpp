@@ -44,6 +44,8 @@ std::string _object_error_category::message(int EV) const {
     return "The end of the file was unexpectedly encountered";
   case object_error::bitcode_section_not_found:
     return "Bitcode section not found in object file";
+  case object_error::bad_offset:
+    return "Bad offset found in object file";
   }
   llvm_unreachable("An enumerator of object_error does not have a message "
                    "defined.");

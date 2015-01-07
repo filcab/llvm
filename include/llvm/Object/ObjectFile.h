@@ -95,12 +95,12 @@ public:
   void moveNext();
 
   std::error_code getName(StringRef &Result) const;
-  uint64_t getAddress() const;
-  uint64_t getSize() const;
+  std::error_code getAddress(uint64_t &Result) const;
+  std::error_code getSize(uint64_t &Result) const;
   std::error_code getContents(StringRef &Result) const;
 
   /// @brief Get the alignment of this section as the actual value (not log 2).
-  uint64_t getAlignment() const;
+  std::error_code getAlignment(uint64_t &Result) const;
 
   bool isText() const;
   bool isData() const;
@@ -223,11 +223,14 @@ protected:
   virtual void moveSectionNext(DataRefImpl &Sec) const = 0;
   virtual std::error_code getSectionName(DataRefImpl Sec,
                                          StringRef &Res) const = 0;
-  virtual uint64_t getSectionAddress(DataRefImpl Sec) const = 0;
-  virtual uint64_t getSectionSize(DataRefImpl Sec) const = 0;
+  virtual std::error_code getSectionAddress(DataRefImpl Sec,
+                                            uint64_t &Addr) const = 0;
+  virtual std::error_code getSectionSize(DataRefImpl Sec,
+                                         uint64_t &Res) const = 0;
   virtual std::error_code getSectionContents(DataRefImpl Sec,
                                              StringRef &Res) const = 0;
-  virtual uint64_t getSectionAlignment(DataRefImpl Sec) const = 0;
+  virtual std::error_code getSectionAlignment(DataRefImpl Sec,
+                                              uint64_t &Res) const = 0;
   virtual bool isSectionText(DataRefImpl Sec) const = 0;
   virtual bool isSectionData(DataRefImpl Sec) const = 0;
   virtual bool isSectionBSS(DataRefImpl Sec) const = 0;
@@ -384,20 +387,20 @@ inline std::error_code SectionRef::getName(StringRef &Result) const {
   return OwningObject->getSectionName(SectionPimpl, Result);
 }
 
-inline uint64_t SectionRef::getAddress() const {
-  return OwningObject->getSectionAddress(SectionPimpl);
+inline std::error_code SectionRef::getAddress(uint64_t &Result) const {
+  return OwningObject->getSectionAddress(SectionPimpl, Result);
 }
 
-inline uint64_t SectionRef::getSize() const {
-  return OwningObject->getSectionSize(SectionPimpl);
+inline std::error_code SectionRef::getSize(uint64_t &Result) const {
+  return OwningObject->getSectionSize(SectionPimpl, Result);
 }
 
 inline std::error_code SectionRef::getContents(StringRef &Result) const {
   return OwningObject->getSectionContents(SectionPimpl, Result);
 }
 
-inline uint64_t SectionRef::getAlignment() const {
-  return OwningObject->getSectionAlignment(SectionPimpl);
+inline std::error_code SectionRef::getAlignment(uint64_t &Result) const {
+  return OwningObject->getSectionAlignment(SectionPimpl, Result);
 }
 
 inline bool SectionRef::isText() const {

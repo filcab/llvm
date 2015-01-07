@@ -82,7 +82,8 @@ protected:
   std::error_code getSymbolAlignment(DataRefImpl Symb,
                                      uint32_t &Res) const override;
   std::error_code getSymbolSize(DataRefImpl Symb, uint64_t &Res) const override;
-  uint32_t getSymbolFlags(DataRefImpl Symb) const override;
+  std::error_code getSymbolFlags(DataRefImpl Symb,
+                                 uint32_t &Flags) const override;
   std::error_code getSymbolOther(DataRefImpl Symb, uint8_t &Res) const override;
   std::error_code getSymbolType(DataRefImpl Symb,
                                 SymbolRef::Type &Res) const override;
@@ -92,11 +93,13 @@ protected:
   void moveSectionNext(DataRefImpl &Sec) const override;
   std::error_code getSectionName(DataRefImpl Sec,
                                  StringRef &Res) const override;
-  uint64_t getSectionAddress(DataRefImpl Sec) const override;
-  uint64_t getSectionSize(DataRefImpl Sec) const override;
+  std::error_code getSectionAddress(DataRefImpl Sec,
+                                    uint64_t &Res) const override;
+  std::error_code getSectionSize(DataRefImpl Sec, uint64_t &Res) const override;
   std::error_code getSectionContents(DataRefImpl Sec,
                                      StringRef &Res) const override;
-  uint64_t getSectionAlignment(DataRefImpl Sec) const override;
+  std::error_code getSectionAlignment(DataRefImpl Sec,
+                                      uint64_t &Res) const override;
   bool isSectionText(DataRefImpl Sec) const override;
   bool isSectionData(DataRefImpl Sec) const override;
   bool isSectionBSS(DataRefImpl Sec) const override;
@@ -363,33 +366,34 @@ ELFObjectFile<ELFT>::getSymbolType(DataRefImpl Symb,
 }
 
 template <class ELFT>
-uint32_t ELFObjectFile<ELFT>::getSymbolFlags(DataRefImpl Symb) const {
+std::error_code ELFObjectFile<ELFT>::getSymbolFlags(DataRefImpl Symb,
+                                                    uint32_t &Flags) const {
   Elf_Sym_Iter EIter = toELFSymIter(Symb);
   const Elf_Sym *ESym = &*EIter;
 
-  uint32_t Result = SymbolRef::SF_None;
+  Flags = SymbolRef::SF_None;
 
   if (ESym->getBinding() != ELF::STB_LOCAL)
-    Result |= SymbolRef::SF_Global;
+    Flags |= SymbolRef::SF_Global;
 
   if (ESym->getBinding() == ELF::STB_WEAK)
-    Result |= SymbolRef::SF_Weak;
+    Flags |= SymbolRef::SF_Weak;
 
   if (ESym->st_shndx == ELF::SHN_ABS)
-    Result |= SymbolRef::SF_Absolute;
+    Flags |= SymbolRef::SF_Absolute;
 
   if (ESym->getType() == ELF::STT_FILE || ESym->getType() == ELF::STT_SECTION ||
       EIter == EF.begin_symbols() || EIter == EF.begin_dynamic_symbols())
-    Result |= SymbolRef::SF_FormatSpecific;
+    Flags |= SymbolRef::SF_FormatSpecific;
 
   if (EF.getSymbolTableIndex(ESym) == ELF::SHN_UNDEF)
-    Result |= SymbolRef::SF_Undefined;
+    Flags |= SymbolRef::SF_Undefined;
 
   if (ESym->getType() == ELF::STT_COMMON ||
       EF.getSymbolTableIndex(ESym) == ELF::SHN_COMMON)
-    Result |= SymbolRef::SF_Common;
+    Flags |= SymbolRef::SF_Common;
 
-  return Result;
+  return object_error::success;
 }
 
 template <class ELFT>
@@ -424,13 +428,17 @@ std::error_code ELFObjectFile<ELFT>::getSectionName(DataRefImpl Sec,
 }
 
 template <class ELFT>
-uint64_t ELFObjectFile<ELFT>::getSectionAddress(DataRefImpl Sec) const {
-  return toELFShdrIter(Sec)->sh_addr;
+std::error_code ELFObjectFile<ELFT>::getSectionAddress(DataRefImpl Sec,
+                                                       uint64_t &Result) const {
+  Result = toELFShdrIter(Sec)->sh_addr;
+  return object_error::success;
 }
 
 template <class ELFT>
-uint64_t ELFObjectFile<ELFT>::getSectionSize(DataRefImpl Sec) const {
-  return toELFShdrIter(Sec)->sh_size;
+std::error_code ELFObjectFile<ELFT>::getSectionSize(DataRefImpl Sec,
+                                                    uint64_t &Result) const {
+  Result = toELFShdrIter(Sec)->sh_size;
+  return object_error::success;
 }
 
 template <class ELFT>
@@ -443,8 +451,9 @@ ELFObjectFile<ELFT>::getSectionContents(DataRefImpl Sec,
 }
 
 template <class ELFT>
-uint64_t ELFObjectFile<ELFT>::getSectionAlignment(DataRefImpl Sec) const {
-  return toELFShdrIter(Sec)->sh_addralign;
+std::error_code ELFObjectFile<ELFT>::getSectionAlignment(DataRefImpl Sec, uint64_t &Result) const {
+  Result = toELFShdrIter(Sec)->sh_addralign;
+  return object_error::success;
 }
 
 template <class ELFT>

@@ -714,7 +714,10 @@ static unsigned writeSymbolTable(raw_fd_ostream &Out,
     }
 
     for (const object::BasicSymbolRef &S : Obj.symbols()) {
-      uint32_t Symflags = S.getFlags();
+      uint32_t Symflags;
+      std::error_code EC = S.getFlags(Symflags);
+      if (EC)
+        report_fatal_error(EC.message());
       if (Symflags & object::SymbolRef::SF_FormatSpecific)
         continue;
       if (!(Symflags & object::SymbolRef::SF_Global))

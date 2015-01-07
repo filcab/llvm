@@ -283,8 +283,6 @@ static void darwinPrintSymbol(MachOObjectFile *MachO, SymbolListT::iterator I,
   MachO::mach_header H;
   MachO::mach_header_64 H_64;
   uint32_t Filetype, Flags;
-  MachO::nlist_64 STE_64;
-  MachO::nlist STE;
   uint8_t NType;
   uint8_t NSect;
   uint16_t NDesc;
@@ -294,22 +292,26 @@ static void darwinPrintSymbol(MachOObjectFile *MachO, SymbolListT::iterator I,
     H_64 = MachO->MachOObjectFile::getHeader64();
     Filetype = H_64.filetype;
     Flags = H_64.flags;
-    STE_64 = MachO->getSymbol64TableEntry(I->Symb);
-    NType = STE_64.n_type;
-    NSect = STE_64.n_sect;
-    NDesc = STE_64.n_desc;
-    NStrx = STE_64.n_strx;
-    NValue = STE_64.n_value;
+    auto STE_64 = MachO->getSymbol64TableEntry(I->Symb);
+    if (std::error_code EC = STE_64.getError())
+      report_fatal_error(EC.message());
+    NType = STE_64->n_type;
+    NSect = STE_64->n_sect;
+    NDesc = STE_64->n_desc;
+    NStrx = STE_64->n_strx;
+    NValue = STE_64->n_value;
   } else {
     H = MachO->MachOObjectFile::getHeader();
     Filetype = H.filetype;
     Flags = H.flags;
-    STE = MachO->getSymbolTableEntry(I->Symb);
-    NType = STE.n_type;
-    NSect = STE.n_sect;
-    NDesc = STE.n_desc;
-    NStrx = STE.n_strx;
-    NValue = STE.n_value;
+    auto STE = MachO->getSymbolTableEntry(I->Symb);
+    if (std::error_code EC = STE.getError())
+      report_fatal_error(EC.message());
+    NType = STE->n_type;
+    NSect = STE->n_sect;
+    NDesc = STE->n_desc;
+    NStrx = STE->n_strx;
+    NValue = STE->n_value;
   }
 
   // If we are printing Mach-O symbols in hex do that and return.
@@ -509,21 +511,23 @@ static const char *getDarwinStabString(uint8_t NType) {
 // darwinPrintStab() prints the n_sect, n_desc along with a symbolic name of
 // a stab n_type value in a Mach-O file.
 static void darwinPrintStab(MachOObjectFile *MachO, SymbolListT::iterator I) {
-  MachO::nlist_64 STE_64;
-  MachO::nlist STE;
   uint8_t NType;
   uint8_t NSect;
   uint16_t NDesc;
   if (MachO->is64Bit()) {
-    STE_64 = MachO->getSymbol64TableEntry(I->Symb);
-    NType = STE_64.n_type;
-    NSect = STE_64.n_sect;
-    NDesc = STE_64.n_desc;
+    auto STE_64 = MachO->getSymbol64TableEntry(I->Symb);
+    if (std::error_code EC = STE_64.getError())
+      report_fatal_error(EC.message());
+    NType = STE_64->n_type;
+    NSect = STE_64->n_sect;
+    NDesc = STE_64->n_desc;
   } else {
-    STE = MachO->getSymbolTableEntry(I->Symb);
-    NType = STE.n_type;
-    NSect = STE.n_sect;
-    NDesc = STE.n_desc;
+    auto STE = MachO->getSymbolTableEntry(I->Symb);
+    if (std::error_code EC = STE.getError())
+      report_fatal_error(EC.message());
+    NType = STE->n_type;
+    NSect = STE->n_sect;
+    NDesc = STE->n_desc;
   }
 
   char Str[18] = "";
@@ -737,11 +741,15 @@ static char getSymbolNMTypeChar(COFFObjectFile &Obj, symbol_iterator I) {
 
 static uint8_t getNType(MachOObjectFile &Obj, DataRefImpl Symb) {
   if (Obj.is64Bit()) {
-    MachO::nlist_64 STE = Obj.getSymbol64TableEntry(Symb);
-    return STE.n_type;
+    auto STE = Obj.getSymbol64TableEntry(Symb);
+    if (std::error_code EC = STE.getError())
+      report_fatal_error(EC.message());
+    return STE->n_type;
   }
-  MachO::nlist STE = Obj.getSymbolTableEntry(Symb);
-  return STE.n_type;
+  auto STE = Obj.getSymbolTableEntry(Symb);
+  if (std::error_code EC = STE.getError())
+    report_fatal_error(EC.message());
+  return STE->n_type;
 }
 
 static char getSymbolNMTypeChar(MachOObjectFile &Obj, basic_symbol_iterator I) {
@@ -815,7 +823,11 @@ static bool isObject(SymbolicFile &Obj, basic_symbol_iterator I) {
 }
 
 static char getNMTypeChar(SymbolicFile &Obj, basic_symbol_iterator I) {
-  uint32_t Symflags = I->getFlags();
+  uint32_t Symflags;
+  std::error_code EC = I->getFlags(Symflags);
+  if (EC)
+    report_fatal_error(EC.message());
+
   if ((Symflags & object::SymbolRef::SF_Weak) && !isa<MachOObjectFile>(Obj)) {
     char Ret = isObject(Obj, I) ? 'v' : 'w';
     if (!(Symflags & object::SymbolRef::SF_Undefined))
@@ -882,14 +894,18 @@ static unsigned getNsectForSegSect(MachOObjectFile *Obj) {
 static unsigned getNsectInMachO(MachOObjectFile &Obj, basic_symbol_iterator I) {
   DataRefImpl Symb = I->getRawDataRefImpl();
   if (Obj.is64Bit()) {
-    MachO::nlist_64 STE = Obj.getSymbol64TableEntry(Symb);
-    if ((STE.n_type & MachO::N_TYPE) == MachO::N_SECT)
-      return STE.n_sect;
+    auto STE = Obj.getSymbol64TableEntry(Symb);
+    if (std::error_code EC = STE.getError())
+      report_fatal_error(EC.message());
+    if ((STE->n_type & MachO::N_TYPE) == MachO::N_SECT)
+      return STE->n_sect;
     return 0;
   }
-  MachO::nlist STE = Obj.getSymbolTableEntry(Symb);
-  if ((STE.n_type & MachO::N_TYPE) == MachO::N_SECT)
-    return STE.n_sect;
+  auto STE = Obj.getSymbolTableEntry(Symb);
+  if (std::error_code EC = STE.getError())
+    report_fatal_error(EC.message());
+  if ((STE->n_type & MachO::N_TYPE) == MachO::N_SECT)
+    return STE->n_sect;
   return 0;
 }
 
@@ -922,7 +938,10 @@ static void dumpSymbolNamesFromObject(SymbolicFile &Obj, bool printName,
       return;
   }
   for (basic_symbol_iterator I = IBegin; I != IEnd; ++I) {
-    uint32_t SymFlags = I->getFlags();
+    uint32_t SymFlags;
+    std::error_code EC = I->getFlags(SymFlags);
+    if (EC)
+      report_fatal_error(EC.message());
     if (!DebugSyms && (SymFlags & SymbolRef::SF_FormatSpecific))
       continue;
     if (WithoutAliases) {

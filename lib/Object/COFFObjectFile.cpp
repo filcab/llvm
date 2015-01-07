@@ -206,32 +206,33 @@ std::error_code COFFObjectFile::getSymbolType(DataRefImpl Ref,
   return object_error::success;
 }
 
-uint32_t COFFObjectFile::getSymbolFlags(DataRefImpl Ref) const {
+std::error_code COFFObjectFile::getSymbolFlags(DataRefImpl Ref,
+                                               uint32_t &Flags) const {
   COFFSymbolRef Symb = getCOFFSymbol(Ref);
-  uint32_t Result = SymbolRef::SF_None;
+  Flags = SymbolRef::SF_None;
 
   if (Symb.isExternal() || Symb.isWeakExternal())
-    Result |= SymbolRef::SF_Global;
+    Flags |= SymbolRef::SF_Global;
 
   if (Symb.isWeakExternal())
-    Result |= SymbolRef::SF_Weak;
+    Flags |= SymbolRef::SF_Weak;
 
   if (Symb.getSectionNumber() == COFF::IMAGE_SYM_ABSOLUTE)
-    Result |= SymbolRef::SF_Absolute;
+    Flags |= SymbolRef::SF_Absolute;
 
   if (Symb.isFileRecord())
-    Result |= SymbolRef::SF_FormatSpecific;
+    Flags |= SymbolRef::SF_FormatSpecific;
 
   if (Symb.isSectionDefinition())
-    Result |= SymbolRef::SF_FormatSpecific;
+    Flags |= SymbolRef::SF_FormatSpecific;
 
   if (Symb.isCommon())
-    Result |= SymbolRef::SF_Common;
+    Flags |= SymbolRef::SF_Common;
 
   if (Symb.isAnyUndefined())
-    Result |= SymbolRef::SF_Undefined;
+    Flags |= SymbolRef::SF_Undefined;
 
-  return Result;
+  return object_error::success;
 }
 
 std::error_code COFFObjectFile::getSymbolSize(DataRefImpl Ref,
@@ -324,13 +325,16 @@ std::error_code COFFObjectFile::getSectionName(DataRefImpl Ref,
   return getSectionName(Sec, Result);
 }
 
-uint64_t COFFObjectFile::getSectionAddress(DataRefImpl Ref) const {
+std::error_code COFFObjectFile::getSectionAddress(DataRefImpl Ref,
+                                                  uint64_t &Result) const {
   const coff_section *Sec = toSec(Ref);
-  return Sec->VirtualAddress;
+  Result = Sec->VirtualAddress;
+  return object_error::success;
 }
 
-uint64_t COFFObjectFile::getSectionSize(DataRefImpl Ref) const {
-  return getSectionSize(toSec(Ref));
+std::error_code COFFObjectFile::getSectionSize(DataRefImpl Ref,
+                                               uint64_t &Result) const {
+  return getSectionSize(toSec(Ref), Result);
 }
 
 std::error_code COFFObjectFile::getSectionContents(DataRefImpl Ref,
@@ -342,9 +346,11 @@ std::error_code COFFObjectFile::getSectionContents(DataRefImpl Ref,
   return EC;
 }
 
-uint64_t COFFObjectFile::getSectionAlignment(DataRefImpl Ref) const {
+std::error_code COFFObjectFile::getSectionAlignment(DataRefImpl Ref,
+                                                    uint64_t &Result) const {
   const coff_section *Sec = toSec(Ref);
-  return uint64_t(1) << (((Sec->Characteristics & 0x00F00000) >> 20) - 1);
+  Result = uint64_t(1) << (((Sec->Characteristics & 0x00F00000) >> 20) - 1);
+  return object_error::success;
 }
 
 bool COFFObjectFile::isSectionText(DataRefImpl Ref) const {
@@ -960,7 +966,8 @@ std::error_code COFFObjectFile::getSectionName(const coff_section *Sec,
   return object_error::success;
 }
 
-uint64_t COFFObjectFile::getSectionSize(const coff_section *Sec) const {
+std::error_code COFFObjectFile::getSectionSize(const coff_section *Sec,
+                                               uint64_t &Result) const {
   // SizeOfRawData and VirtualSize change what they represent depending on
   // whether or not we have an executable image.
   //
@@ -971,13 +978,12 @@ uint64_t COFFObjectFile::getSectionSize(const coff_section *Sec) const {
   // actual section size is in VirtualSize.  It is possible for VirtualSize to
   // be greater than SizeOfRawData; the contents past that point should be
   // considered to be zero.
-  uint32_t SectionSize;
   if (Sec->VirtualSize)
-    SectionSize = std::min(Sec->VirtualSize, Sec->SizeOfRawData);
+    Result = std::min(Sec->VirtualSize, Sec->SizeOfRawData);
   else
-    SectionSize = Sec->SizeOfRawData;
+    Result = Sec->SizeOfRawData;
 
-  return SectionSize;
+  return object_error::success;
 }
 
 std::error_code
@@ -991,7 +997,13 @@ COFFObjectFile::getSectionContents(const coff_section *Sec,
   // within the file bounds. We don't need to make sure it doesn't cover other
   // data, as there's nothing that says that is not allowed.
   uintptr_t ConStart = uintptr_t(base()) + Sec->PointerToRawData;
-  uint32_t SectionSize = getSectionSize(Sec);
+  uint64_t SectionSize;
+  std::error_code EC = getSectionSize(Sec, SectionSize);
+  if (EC)
+    return EC;
+
+  // TODO: Maybe merge this check in the previous call (or an earlier one,
+  // which actually reads the coff_section)
   if (checkOffset(Data, ConStart, SectionSize))
     return object_error::parse_failed;
   Res = makeArrayRef(reinterpret_cast<const uint8_t *>(ConStart), SectionSize);

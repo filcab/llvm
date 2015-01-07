@@ -78,7 +78,10 @@ RelocationValueRef RuntimeDyldMachO::getRelocationValueRef(
     SectionRef Sec = Obj.getRelocationSection(RelInfo);
     bool IsCode = Sec.isText();
     Value.SectionID = findOrEmitSection(Obj, Sec, IsCode, ObjSectionToID);
-    uint64_t Addr = Sec.getAddress();
+    uint64_t Addr;
+    std::error_code EC = Sec.getAddress(Addr);
+    if (EC)
+      report_fatal_error(EC.message());
     Value.Offset = RE.Addend - Addr;
   }
 
@@ -123,8 +126,14 @@ RuntimeDyldMachO::getSectionByAddress(const MachOObjectFile &Obj,
   section_iterator SE = Obj.section_end();
 
   for (; SI != SE; ++SI) {
-    uint64_t SAddr = SI->getAddress();
-    uint64_t SSize = SI->getSize();
+    uint64_t SAddr;
+    std::error_code EC = SI->getAddress(SAddr);
+    if (EC)
+      report_fatal_error(EC.message());
+    uint64_t SSize;
+    EC = SI->getSize(SSize);
+    if (EC)
+      report_fatal_error(EC.message());
     if ((Addr >= SAddr) && (Addr < SAddr + SSize))
       return SI;
   }
@@ -141,10 +150,14 @@ void RuntimeDyldMachO::populateIndirectSymbolPointersSection(
   assert(!Obj.is64Bit() &&
          "Pointer table section not supported in 64-bit MachO.");
 
-  MachO::dysymtab_command DySymTabCmd = Obj.getDysymtabLoadCommand();
-  MachO::section Sec32 = Obj.getSection(PTSection.getRawDataRefImpl());
-  uint32_t PTSectionSize = Sec32.size;
-  unsigned FirstIndirectSymbol = Sec32.reserved1;
+  auto DySymTabCmd = Obj.getDysymtabLoadCommand();
+  if (std::error_code EC = DySymTabCmd.getError())
+    report_fatal_error(EC.message());
+  auto Sec32 = Obj.getSection(PTSection.getRawDataRefImpl());
+  if (std::error_code EC = Sec32.getError())
+    report_fatal_error(EC.message());
+  uint32_t PTSectionSize = Sec32->size;
+  unsigned FirstIndirectSymbol = Sec32->reserved1;
   const unsigned PTEntrySize = 4;
   unsigned NumPTEntries = PTSectionSize / PTEntrySize;
   unsigned PTEntryOffset = 0;
@@ -160,7 +173,7 @@ void RuntimeDyldMachO::populateIndirectSymbolPointersSection(
 
   for (unsigned i = 0; i < NumPTEntries; ++i) {
     unsigned SymbolIndex =
-      Obj.getIndirectSymbolTableEntry(DySymTabCmd, FirstIndirectSymbol + i);
+        Obj.getIndirectSymbolTableEntry(*DySymTabCmd, FirstIndirectSymbol + i);
     symbol_iterator SI = Obj.getSymbolByIndex(SymbolIndex);
     StringRef IndirectSymbolName;
     SI->getName(IndirectSymbolName);

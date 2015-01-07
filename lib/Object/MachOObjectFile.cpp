@@ -38,36 +38,47 @@ namespace {
   };
 }
 
-template<typename T>
-static T getStruct(const MachOObjectFile *O, const char *P) {
+template <typename T>
+static ErrorOr<T> getStruct(const MachOObjectFile *O, const char *P) __attribute__((noinline)){
+  // Don't read before the beginning or past the end of the file
+  if (P < O->getData().begin() || P + sizeof(T) > O->getData().end())
+    return object_error::bad_offset;
+
   T Cmd;
   memcpy(&Cmd, P, sizeof(T));
   if (O->isLittleEndian() != sys::IsLittleEndianHost)
     MachO::swapStruct(Cmd);
-  return Cmd;
+  return std::move(Cmd);
 }
 
 static uint32_t
 getSegmentLoadCommandNumSections(const MachOObjectFile *O,
                                  const MachOObjectFile::LoadCommandInfo &L) {
   if (O->is64Bit()) {
-    MachO::segment_command_64 S = O->getSegment64LoadCommand(L);
-    return S.nsects;
+    auto S = O->getSegment64LoadCommand(L);
+    if (std::error_code EC = S.getError())
+      report_fatal_error(EC.message());
+    return S->nsects;
   }
-  MachO::segment_command S = O->getSegmentLoadCommand(L);
-  return S.nsects;
+  auto S = O->getSegmentLoadCommand(L);
+  if (std::error_code EC = S.getError())
+    report_fatal_error(EC.message());
+  return S->nsects;
 }
 
 static bool isPageZeroSegment(const MachOObjectFile *O,
                               const MachOObjectFile::LoadCommandInfo &L) {
   if (O->is64Bit()) {
-    MachO::segment_command_64 S = O->getSegment64LoadCommand(L);
-    return StringRef("__PAGEZERO").equals(S.segname);
+    auto S = O->getSegment64LoadCommand(L);
+    if (std::error_code EC = S.getError())
+      report_fatal_error(EC.message());
+    return StringRef("__PAGEZERO").equals(S->segname);
   }
-  MachO::segment_command S = O->getSegmentLoadCommand(L);
-  return StringRef("__PAGEZERO").equals(S.segname);
+  auto S = O->getSegmentLoadCommand(L);
+  if (std::error_code EC = S.getError())
+    report_fatal_error(EC.message());
+  return StringRef("__PAGEZERO").equals(S->segname);
 }
-
 
 static const char *
 getSectionPtr(const MachOObjectFile *O, MachOObjectFile::LoadCommandInfo L,
@@ -88,7 +99,7 @@ static const char *getPtr(const MachOObjectFile *O, size_t Offset) {
   return O->getData().substr(Offset, 1).data();
 }
 
-static MachO::nlist_base
+static ErrorOr<MachO::nlist_base>
 getSymbolTableEntryBase(const MachOObjectFile *O, DataRefImpl DRI) {
   const char *P = reinterpret_cast<const char *>(DRI.p);
   return getStruct<MachO::nlist_base>(O, P);
@@ -146,7 +157,9 @@ static void printRelocationTargetName(const MachOObjectFile *O,
       std::error_code ec;
 
       StringRef Name;
-      uint64_t Addr = Section.getAddress();
+      uint64_t Addr;
+      if ((ec = Section.getAddress(Addr)))
+        report_fatal_error(ec.message());
       if (Addr != Val)
         continue;
       if ((ec = Section.getName(Name)))
@@ -219,14 +232,21 @@ static unsigned getPlainRelocationType(const MachOObjectFile *O,
   return RE.r_word1 & 0xf;
 }
 
-static uint32_t getSectionFlags(const MachOObjectFile *O,
-                                DataRefImpl Sec) {
+static std::error_code getSectionFlags(const MachOObjectFile *O,
+                                       DataRefImpl Sec, uint32_t &Flags) {
   if (O->is64Bit()) {
-    MachO::section_64 Sect = O->getSection64(Sec);
-    return Sect.flags;
+    auto Sect = O->getSection64(Sec);
+    if (std::error_code EC = Sect.getError())
+      return EC;
+    Flags = Sect->flags;
+    return object_error::success;
   }
-  MachO::section Sect = O->getSection(Sec);
-  return Sect.flags;
+
+  auto Sect = O->getSection(Sec);
+  if (std::error_code EC = Sect.getError())
+    return EC;
+  Flags = Sect->flags;
+  return object_error::success;
 }
 
 MachOObjectFile::MachOObjectFile(MemoryBufferRef Object, bool IsLittleEndian,
@@ -242,64 +262,67 @@ MachOObjectFile::MachOObjectFile(MemoryBufferRef Object, bool IsLittleEndian,
   MachO::LoadCommandType SegmentLoadType = is64Bit() ?
     MachO::LC_SEGMENT_64 : MachO::LC_SEGMENT;
 
-  MachOObjectFile::LoadCommandInfo Load = getFirstLoadCommandInfo();
-  for (unsigned I = 0; ; ++I) {
-    if (Load.C.cmd == MachO::LC_SYMTAB) {
+  auto Load = getFirstLoadCommandInfo();
+  for (unsigned I = 0;; ++I) {
+    EC = Load.getError();
+    if (EC)
+      return;
+    if (Load->C.cmd == MachO::LC_SYMTAB) {
       // Multiple symbol tables
       if (SymtabLoadCmd) {
         EC = object_error::parse_failed;
         return;
       }
-      SymtabLoadCmd = Load.Ptr;
-    } else if (Load.C.cmd == MachO::LC_DYSYMTAB) {
+      SymtabLoadCmd = Load->Ptr;
+    } else if (Load->C.cmd == MachO::LC_DYSYMTAB) {
       // Multiple dynamic symbol tables
       if (DysymtabLoadCmd) {
         EC = object_error::parse_failed;
         return;
       }
-      DysymtabLoadCmd = Load.Ptr;
-    } else if (Load.C.cmd == MachO::LC_DATA_IN_CODE) {
+      DysymtabLoadCmd = Load->Ptr;
+    } else if (Load->C.cmd == MachO::LC_DATA_IN_CODE) {
       // Multiple data in code tables
       if (DataInCodeLoadCmd) {
         EC = object_error::parse_failed;
         return;
       }
-      DataInCodeLoadCmd = Load.Ptr;
-    } else if (Load.C.cmd == MachO::LC_DYLD_INFO || 
-               Load.C.cmd == MachO::LC_DYLD_INFO_ONLY) {
+      DataInCodeLoadCmd = Load->Ptr;
+    } else if (Load->C.cmd == MachO::LC_DYLD_INFO || 
+               Load->C.cmd == MachO::LC_DYLD_INFO_ONLY) {
       // Multiple dyldinfo load commands
       if (DyldInfoLoadCmd) {
         EC = object_error::parse_failed;
         return;
       }
-      DyldInfoLoadCmd = Load.Ptr;
-    } else if (Load.C.cmd == MachO::LC_UUID) {
+      DyldInfoLoadCmd = Load->Ptr;
+    } else if (Load->C.cmd == MachO::LC_UUID) {
       // Multiple UUID load commands
       if (UuidLoadCmd) {
         EC = object_error::parse_failed;
         return;
       }
-      UuidLoadCmd = Load.Ptr;
-    } else if (Load.C.cmd == SegmentLoadType) {
-      uint32_t NumSections = getSegmentLoadCommandNumSections(this, Load);
+      UuidLoadCmd = Load->Ptr;
+    } else if (Load->C.cmd == SegmentLoadType) {
+      uint32_t NumSections = getSegmentLoadCommandNumSections(this, *Load);
       for (unsigned J = 0; J < NumSections; ++J) {
-        const char *Sec = getSectionPtr(this, Load, J);
+        const char *Sec = getSectionPtr(this, *Load, J);
         Sections.push_back(Sec);
       }
-      if (isPageZeroSegment(this, Load))
+      if (isPageZeroSegment(this, *Load))
         HasPageZeroSegment = true;
-    } else if (Load.C.cmd == MachO::LC_LOAD_DYLIB ||
-               Load.C.cmd == MachO::LC_LOAD_WEAK_DYLIB ||
-               Load.C.cmd == MachO::LC_LAZY_LOAD_DYLIB ||
-               Load.C.cmd == MachO::LC_REEXPORT_DYLIB ||
-               Load.C.cmd == MachO::LC_LOAD_UPWARD_DYLIB) {
-      Libraries.push_back(Load.Ptr);
+    } else if (Load->C.cmd == MachO::LC_LOAD_DYLIB ||
+               Load->C.cmd == MachO::LC_LOAD_WEAK_DYLIB ||
+               Load->C.cmd == MachO::LC_LAZY_LOAD_DYLIB ||
+               Load->C.cmd == MachO::LC_REEXPORT_DYLIB ||
+               Load->C.cmd == MachO::LC_LOAD_UPWARD_DYLIB) {
+      Libraries.push_back(Load->Ptr);
     }
 
     if (I == LoadCommandCount - 1)
       break;
     else
-      Load = getNextLoadCommandInfo(Load);
+      Load = getNextLoadCommandInfo(*Load);
   }
 }
 
@@ -312,39 +335,58 @@ void MachOObjectFile::moveSymbolNext(DataRefImpl &Symb) const {
 
 std::error_code MachOObjectFile::getSymbolName(DataRefImpl Symb,
                                                StringRef &Res) const {
-  StringRef StringTable = getStringTableData();
-  MachO::nlist_base Entry = getSymbolTableEntryBase(this, Symb);
-  const char *Start = &StringTable.data()[Entry.n_strx];
+  ErrorOr<StringRef> StringTable = getStringTableData();
+  if (std::error_code EC = StringTable.getError())
+    return EC;
+
+  auto Entry = getSymbolTableEntryBase(this, Symb);
+  if (std::error_code EC = Entry.getError())
+    return EC;
+
+  const char *Start = &StringTable->data()[Entry->n_strx];
   Res = StringRef(Start);
   return object_error::success;
 }
 
-unsigned MachOObjectFile::getSectionType(SectionRef Sec) const {
+std::error_code MachOObjectFile::getSectionType(SectionRef Sec,
+                                                unsigned &Type) const {
   DataRefImpl DRI = Sec.getRawDataRefImpl();
-  uint32_t Flags = getSectionFlags(this, DRI);
-  return Flags & MachO::SECTION_TYPE;
+  uint32_t Flags;
+  std::error_code EC = getSectionFlags(this, DRI, Flags);
+  // bit manipulations are safe to do, even if EC is not success
+  Type = Flags & MachO::SECTION_TYPE;
+  return EC;
 }
 
 // getIndirectName() returns the name of the alias'ed symbol who's string table
 // index is in the n_value field.
 std::error_code MachOObjectFile::getIndirectName(DataRefImpl Symb,
                                                  StringRef &Res) const {
-  StringRef StringTable = getStringTableData();
+  ErrorOr<StringRef> StringTable = getStringTableData();
+  if (std::error_code EC = StringTable.getError())
+    return EC;
+
   uint64_t NValue;
   if (is64Bit()) {
-    MachO::nlist_64 Entry = getSymbol64TableEntry(Symb);
-    NValue = Entry.n_value;
-    if ((Entry.n_type & MachO::N_TYPE) != MachO::N_INDR)
+    auto Entry = getSymbol64TableEntry(Symb);
+    if (std::error_code EC = Entry.getError())
+      return EC;
+
+    NValue = Entry->n_value;
+    if ((Entry->n_type & MachO::N_TYPE) != MachO::N_INDR)
       return object_error::parse_failed;
   } else {
-    MachO::nlist Entry = getSymbolTableEntry(Symb);
-    NValue = Entry.n_value;
-    if ((Entry.n_type & MachO::N_TYPE) != MachO::N_INDR)
+    auto Entry = getSymbolTableEntry(Symb);
+    if (std::error_code EC = Entry.getError())
+      return EC;
+
+    NValue = Entry->n_value;
+    if ((Entry->n_type & MachO::N_TYPE) != MachO::N_INDR)
       return object_error::parse_failed;
   }
-  if (NValue >= StringTable.size())
+  if (NValue >= StringTable->size())
     return object_error::parse_failed;
-  const char *Start = &StringTable.data()[NValue];
+  const char *Start = &StringTable->data()[NValue];
   Res = StringRef(Start);
   return object_error::success;
 }
@@ -352,29 +394,39 @@ std::error_code MachOObjectFile::getIndirectName(DataRefImpl Symb,
 std::error_code MachOObjectFile::getSymbolAddress(DataRefImpl Symb,
                                                   uint64_t &Res) const {
   if (is64Bit()) {
-    MachO::nlist_64 Entry = getSymbol64TableEntry(Symb);
-    if ((Entry.n_type & MachO::N_TYPE) == MachO::N_UNDF &&
-        Entry.n_value == 0)
+    auto Entry = getSymbol64TableEntry(Symb);
+    if (std::error_code EC = Entry.getError())
+      return EC;
+
+    if ((Entry->n_type & MachO::N_TYPE) == MachO::N_UNDF && Entry->n_value == 0)
       Res = UnknownAddressOrSize;
     else
-      Res = Entry.n_value;
+      Res = Entry->n_value;
   } else {
-    MachO::nlist Entry = getSymbolTableEntry(Symb);
-    if ((Entry.n_type & MachO::N_TYPE) == MachO::N_UNDF &&
-        Entry.n_value == 0)
+    auto Entry = getSymbolTableEntry(Symb);
+    if (std::error_code EC = Entry.getError())
+      return EC;
+
+    if ((Entry->n_type & MachO::N_TYPE) == MachO::N_UNDF && Entry->n_value == 0)
       Res = UnknownAddressOrSize;
     else
-      Res = Entry.n_value;
+      Res = Entry->n_value;
   }
   return object_error::success;
 }
 
 std::error_code MachOObjectFile::getSymbolAlignment(DataRefImpl DRI,
                                                     uint32_t &Result) const {
-  uint32_t flags = getSymbolFlags(DRI);
-  if (flags & SymbolRef::SF_Common) {
-    MachO::nlist_base Entry = getSymbolTableEntryBase(this, DRI);
-    Result = 1 << MachO::GET_COMM_ALIGN(Entry.n_desc);
+  uint32_t Flags;
+  std::error_code EC = getSymbolFlags(DRI, Flags);
+  if (EC)
+    return EC;
+
+  if (Flags & SymbolRef::SF_Common) {
+    auto Entry = getSymbolTableEntryBase(this, DRI);
+    if (std::error_code EC = Entry.getError())
+      return EC;
+    Result = 1 << MachO::GET_COMM_ALIGN(Entry->n_desc);
   } else {
     Result = 0;
   }
@@ -387,9 +439,13 @@ std::error_code MachOObjectFile::getSymbolSize(DataRefImpl DRI,
   uint64_t EndOffset = 0;
   uint8_t SectionIndex;
 
-  MachO::nlist_base Entry = getSymbolTableEntryBase(this, DRI);
+  auto Entry = getSymbolTableEntryBase(this, DRI);
+  if (std::error_code EC = Entry.getError())
+    return EC;
+
   uint64_t Value;
-  getSymbolAddress(DRI, Value);
+  if (std::error_code EC = getSymbolAddress(DRI, Value))
+    return EC;
   if (Value == UnknownAddressOrSize) {
     Result = UnknownAddressOrSize;
     return object_error::success;
@@ -397,10 +453,14 @@ std::error_code MachOObjectFile::getSymbolSize(DataRefImpl DRI,
 
   BeginOffset = Value;
 
-  SectionIndex = Entry.n_sect;
+  SectionIndex = Entry->n_sect;
   if (!SectionIndex) {
-    uint32_t flags = getSymbolFlags(DRI);
-    if (flags & SymbolRef::SF_Common)
+    uint32_t Flags;
+    std::error_code EC = getSymbolFlags(DRI, Flags);
+    if (EC)
+      return EC;
+
+    if (Flags & SymbolRef::SF_Common)
       Result = Value;
     else
       Result = UnknownAddressOrSize;
@@ -414,15 +474,19 @@ std::error_code MachOObjectFile::getSymbolSize(DataRefImpl DRI,
     getSymbolAddress(DRI, Value);
     if (Value == UnknownAddressOrSize)
       continue;
-    if (Entry.n_sect == SectionIndex && Value > BeginOffset)
+    if (Entry->n_sect == SectionIndex && Value > BeginOffset)
       if (!EndOffset || Value < EndOffset)
         EndOffset = Value;
   }
   if (!EndOffset) {
     DataRefImpl Sec;
     Sec.d.a = SectionIndex-1;
-    uint64_t Size = getSectionSize(Sec);
-    EndOffset = getSectionAddress(Sec);
+    uint64_t Size;
+    if (std::error_code EC = getSectionSize(Sec, Size))
+      return EC;
+
+    if (std::error_code EC = getSectionAddress(Sec, EndOffset))
+      return EC;
     EndOffset += Size;
   }
   Result = EndOffset - BeginOffset;
@@ -431,8 +495,11 @@ std::error_code MachOObjectFile::getSymbolSize(DataRefImpl DRI,
 
 std::error_code MachOObjectFile::getSymbolType(DataRefImpl Symb,
                                                SymbolRef::Type &Res) const {
-  MachO::nlist_base Entry = getSymbolTableEntryBase(this, Symb);
-  uint8_t n_type = Entry.n_type;
+  auto Entry = getSymbolTableEntryBase(this, Symb);
+  if (std::error_code EC = Entry.getError())
+    return EC;
+
+  uint8_t n_type = Entry->n_type;
 
   Res = SymbolRef::ST_Other;
 
@@ -453,49 +520,55 @@ std::error_code MachOObjectFile::getSymbolType(DataRefImpl Symb,
   return object_error::success;
 }
 
-uint32_t MachOObjectFile::getSymbolFlags(DataRefImpl DRI) const {
-  MachO::nlist_base Entry = getSymbolTableEntryBase(this, DRI);
+std::error_code MachOObjectFile::getSymbolFlags(DataRefImpl DRI,
+                                                uint32_t &Flags) const {
+  auto Entry = getSymbolTableEntryBase(this, DRI);
+  if (std::error_code EC = Entry.getError())
+    return EC;
 
-  uint8_t MachOType = Entry.n_type;
-  uint16_t MachOFlags = Entry.n_desc;
+  uint8_t MachOType = Entry->n_type;
+  uint16_t MachOFlags = Entry->n_desc;
 
-  uint32_t Result = SymbolRef::SF_None;
+  Flags = SymbolRef::SF_None;
 
   if ((MachOType & MachO::N_TYPE) == MachO::N_UNDF)
-    Result |= SymbolRef::SF_Undefined;
+    Flags |= SymbolRef::SF_Undefined;
 
   if ((MachOType & MachO::N_TYPE) == MachO::N_INDR)
-    Result |= SymbolRef::SF_Indirect;
+    Flags |= SymbolRef::SF_Indirect;
 
   if (MachOType & MachO::N_STAB)
-    Result |= SymbolRef::SF_FormatSpecific;
+    Flags |= SymbolRef::SF_FormatSpecific;
 
   if (MachOType & MachO::N_EXT) {
-    Result |= SymbolRef::SF_Global;
+    Flags |= SymbolRef::SF_Global;
     if ((MachOType & MachO::N_TYPE) == MachO::N_UNDF) {
       uint64_t Value;
       getSymbolAddress(DRI, Value);
       if (Value && Value != UnknownAddressOrSize)
-        Result |= SymbolRef::SF_Common;
+        Flags |= SymbolRef::SF_Common;
     }
   }
 
   if (MachOFlags & (MachO::N_WEAK_REF | MachO::N_WEAK_DEF))
-    Result |= SymbolRef::SF_Weak;
+    Flags |= SymbolRef::SF_Weak;
 
   if (MachOFlags & (MachO::N_ARM_THUMB_DEF))
-    Result |= SymbolRef::SF_Thumb;
+    Flags |= SymbolRef::SF_Thumb;
 
   if ((MachOType & MachO::N_TYPE) == MachO::N_ABS)
-    Result |= SymbolRef::SF_Absolute;
+    Flags |= SymbolRef::SF_Absolute;
 
-  return Result;
+  return object_error::success;
 }
 
 std::error_code MachOObjectFile::getSymbolSection(DataRefImpl Symb,
                                                   section_iterator &Res) const {
-  MachO::nlist_base Entry = getSymbolTableEntryBase(this, Symb);
-  uint8_t index = Entry.n_sect;
+  auto Entry = getSymbolTableEntryBase(this, Symb);
+  if (std::error_code EC = Entry.getError())
+    return EC;
+
+  uint8_t index = Entry->n_sect;
 
   if (index == 0) {
     Res = section_end();
@@ -519,16 +592,36 @@ std::error_code MachOObjectFile::getSectionName(DataRefImpl Sec,
   return object_error::success;
 }
 
-uint64_t MachOObjectFile::getSectionAddress(DataRefImpl Sec) const {
-  if (is64Bit())
-    return getSection64(Sec).addr;
-  return getSection(Sec).addr;
+std::error_code MachOObjectFile::getSectionAddress(DataRefImpl Sec,
+                                                   uint64_t &Result) const {
+  if (is64Bit()) {
+    auto Section = getSection64(Sec);
+    if (std::error_code EC = Section.getError())
+      return EC;
+    Result = Section->addr;
+  } else {
+    auto Section = getSection(Sec);
+    if (std::error_code EC = Section.getError())
+      return EC;
+    Result = Section->addr;
+  }
+  return object_error::success;
 }
 
-uint64_t MachOObjectFile::getSectionSize(DataRefImpl Sec) const {
-  if (is64Bit())
-    return getSection64(Sec).size;
-  return getSection(Sec).size;
+std::error_code MachOObjectFile::getSectionSize(DataRefImpl Sec,
+                                                uint64_t &Result) const {
+  if (is64Bit()) {
+    auto Section = getSection64(Sec);
+    if (std::error_code EC = Section.getError())
+      return EC;
+    Result = Section->size;
+  } else {
+    auto Section = getSection(Sec);
+    if (std::error_code EC = Section.getError())
+      return EC;
+    Result = Section->size;
+  }
+  return object_error::success;
 }
 
 std::error_code MachOObjectFile::getSectionContents(DataRefImpl Sec,
@@ -537,39 +630,55 @@ std::error_code MachOObjectFile::getSectionContents(DataRefImpl Sec,
   uint64_t Size;
 
   if (is64Bit()) {
-    MachO::section_64 Sect = getSection64(Sec);
-    Offset = Sect.offset;
-    Size = Sect.size;
+    auto Section = getSection64(Sec);
+    if (std::error_code EC = Section.getError())
+      return EC;
+    Offset = Section->offset;
+    Size = Section->size;
   } else {
-    MachO::section Sect = getSection(Sec);
-    Offset = Sect.offset;
-    Size = Sect.size;
+    auto Section = getSection(Sec);
+    if (std::error_code EC = Section.getError())
+      return EC;
+    Offset = Section->offset;
+    Size = Section->size;
   }
 
   Res = this->getData().substr(Offset, Size);
   return object_error::success;
 }
 
-uint64_t MachOObjectFile::getSectionAlignment(DataRefImpl Sec) const {
+std::error_code MachOObjectFile::getSectionAlignment(DataRefImpl Sec,
+                                                     uint64_t &Result) const {
   uint32_t Align;
   if (is64Bit()) {
-    MachO::section_64 Sect = getSection64(Sec);
-    Align = Sect.align;
+    auto Sect = getSection64(Sec);
+    if (std::error_code EC = Sect.getError())
+      return EC;
+    Align = Sect->align;
   } else {
-    MachO::section Sect = getSection(Sec);
-    Align = Sect.align;
+    auto Sect = getSection(Sec);
+    if (std::error_code EC = Sect.getError())
+      return EC;
+    Align = Sect->align;
   }
 
-  return uint64_t(1) << Align;
+  Result = uint64_t(1) << Align;
+  return object_error::success;
 }
 
 bool MachOObjectFile::isSectionText(DataRefImpl Sec) const {
-  uint32_t Flags = getSectionFlags(this, Sec);
+  uint32_t Flags;
+  std::error_code EC = getSectionFlags(this, Sec, Flags);
+  if (EC)
+    report_fatal_error(EC.message());
   return Flags & MachO::S_ATTR_PURE_INSTRUCTIONS;
 }
 
 bool MachOObjectFile::isSectionData(DataRefImpl Sec) const {
-  uint32_t Flags = getSectionFlags(this, Sec);
+  uint32_t Flags;
+  std::error_code EC = getSectionFlags(this, Sec, Flags);
+  if (EC)
+    report_fatal_error(EC.message());
   unsigned SectionType = Flags & MachO::SECTION_TYPE;
   return !(Flags & MachO::S_ATTR_PURE_INSTRUCTIONS) &&
          !(SectionType == MachO::S_ZEROFILL ||
@@ -577,7 +686,10 @@ bool MachOObjectFile::isSectionData(DataRefImpl Sec) const {
 }
 
 bool MachOObjectFile::isSectionBSS(DataRefImpl Sec) const {
-  uint32_t Flags = getSectionFlags(this, Sec);
+  uint32_t Flags;
+  std::error_code EC  = getSectionFlags(this, Sec, Flags);
+  if (EC)
+    report_fatal_error(EC.message());
   unsigned SectionType = Flags & MachO::SECTION_TYPE;
   return !(Flags & MachO::S_ATTR_PURE_INSTRUCTIONS) &&
          (SectionType == MachO::S_ZEROFILL ||
@@ -596,12 +708,20 @@ bool MachOObjectFile::sectionContainsSymbol(DataRefImpl Sec,
   if (ST == SymbolRef::ST_Unknown)
     return false;
 
-  uint64_t SectBegin = getSectionAddress(Sec);
-  uint64_t SectEnd = getSectionSize(Sec);
+  uint64_t SectBegin;
+  std::error_code EC  = getSectionAddress(Sec, SectBegin);
+  if (EC)
+    report_fatal_error(EC.message());
+  uint64_t SectEnd;
+  EC  = getSectionSize(Sec, SectEnd);
+  if (EC)
+    report_fatal_error(EC.message());
   SectEnd += SectBegin;
 
   uint64_t SymAddr;
-  getSymbolAddress(Symb, SymAddr);
+  EC = getSymbolAddress(Symb, SymAddr);
+  if (EC)
+    report_fatal_error(EC.message());
   return (SymAddr >= SectBegin) && (SymAddr < SectEnd);
 }
 
@@ -616,11 +736,15 @@ relocation_iterator
 MachOObjectFile::section_rel_end(DataRefImpl Sec) const {
   uint32_t Num;
   if (is64Bit()) {
-    MachO::section_64 Sect = getSection64(Sec);
-    Num = Sect.nreloc;
+    auto Sect = getSection64(Sec);
+    if (std::error_code EC = Sect.getError())
+      report_fatal_error(EC.message());
+    Num = Sect->nreloc;
   } else {
-    MachO::section Sect = getSection(Sec);
-    Num = Sect.nreloc;
+    auto Sect = getSection(Sec);
+    if (std::error_code EC = Sect.getError())
+      report_fatal_error(EC.message());
+    Num = Sect->nreloc;
   }
 
   DataRefImpl Ret;
@@ -640,7 +764,10 @@ std::error_code MachOObjectFile::getRelocationAddress(DataRefImpl Rel,
 
   DataRefImpl Sec;
   Sec.d.a = Rel.d.a;
-  uint64_t SecAddress = getSectionAddress(Sec);
+  uint64_t SecAddress;
+  std::error_code EC  = getSectionAddress(Sec, SecAddress);
+  if (EC)
+    return EC;
   Res = SecAddress + Offset;
   return object_error::success;
 }
@@ -665,11 +792,13 @@ MachOObjectFile::getRelocationSymbol(DataRefImpl Rel) const {
   if (!isExtern)
     return symbol_end();
 
-  MachO::symtab_command S = getSymtabLoadCommand();
+  auto S = getSymtabLoadCommand();
+  if (std::error_code EC = S.getError())
+    report_fatal_error(EC.message());
   unsigned SymbolTableEntrySize = is64Bit() ?
     sizeof(MachO::nlist_64) :
     sizeof(MachO::nlist);
-  uint64_t Offset = S.symoff + SymbolIdx * SymbolTableEntrySize;
+  uint64_t Offset = S->symoff + SymbolIdx * SymbolTableEntrySize;
   DataRefImpl Sym;
   Sym.p = reinterpret_cast<uintptr_t>(getPtr(this, Offset));
   return symbol_iterator(SymbolRef(Sym, this));
@@ -1154,13 +1283,15 @@ std::error_code MachOObjectFile::getLibraryShortNameByIndex(unsigned Index,
   // all the Libraries.
   if (LibrariesShortNames.size() == 0) {
     for (unsigned i = 0; i < Libraries.size(); i++) {
-      MachO::dylib_command D =
-        getStruct<MachO::dylib_command>(this, Libraries[i]);
-      if (D.dylib.name >= D.cmdsize)
+      auto D = getStruct<MachO::dylib_command>(this, Libraries[i]);
+      if (std::error_code EC = D.getError())
+        return EC;
+
+      if (D->dylib.name >= D->cmdsize)
         return object_error::parse_failed;
-      const char *P = (const char *)(Libraries[i]) + D.dylib.name;
+      const char *P = (const char *)(Libraries[i]) + D->dylib.name;
       StringRef Name = StringRef(P);
-      if (D.dylib.name+Name.size() >= D.cmdsize)
+      if (D->dylib.name+Name.size() >= D->cmdsize)
         return object_error::parse_failed;
       StringRef Suffix;
       bool isFramework;
@@ -1185,12 +1316,15 @@ basic_symbol_iterator MachOObjectFile::symbol_end_impl() const {
   if (!SymtabLoadCmd)
     return basic_symbol_iterator(SymbolRef(DRI, this));
 
-  MachO::symtab_command Symtab = getSymtabLoadCommand();
+  auto Symtab = getSymtabLoadCommand();
+  if (std::error_code EC = Symtab.getError())
+    report_fatal_error(EC.message());
+
   unsigned SymbolTableEntrySize = is64Bit() ?
     sizeof(MachO::nlist_64) :
     sizeof(MachO::nlist);
-  unsigned Offset = Symtab.symoff +
-    Symtab.nsyms * SymbolTableEntrySize;
+  unsigned Offset = Symtab->symoff +
+    Symtab->nsyms * SymbolTableEntrySize;
   DRI.p = reinterpret_cast<uintptr_t>(getPtr(this, Offset));
   return basic_symbol_iterator(SymbolRef(DRI, this));
 }
@@ -1200,11 +1334,13 @@ basic_symbol_iterator MachOObjectFile::getSymbolByIndex(unsigned Index) const {
   if (!SymtabLoadCmd)
     return basic_symbol_iterator(SymbolRef(DRI, this));
 
-  MachO::symtab_command Symtab = getSymtabLoadCommand();
-  assert(Index < Symtab.nsyms && "Requested symbol index is out of range.");
+  auto Symtab = getSymtabLoadCommand();
+  if (std::error_code EC = Symtab.getError())
+    report_fatal_error(EC.message());
+  assert(Index < Symtab->nsyms && "Requested symbol index is out of range.");
   unsigned SymbolTableEntrySize =
     is64Bit() ? sizeof(MachO::nlist_64) : sizeof(MachO::nlist);
-  DRI.p = reinterpret_cast<uintptr_t>(getPtr(this, Symtab.symoff));
+  DRI.p = reinterpret_cast<uintptr_t>(getPtr(this, Symtab->symoff));
   DRI.p += Index * SymbolTableEntrySize;
   return basic_symbol_iterator(SymbolRef(DRI, this));
 }
@@ -1464,8 +1600,10 @@ dice_iterator MachOObjectFile::begin_dices() const {
   if (!DataInCodeLoadCmd)
     return dice_iterator(DiceRef(DRI, this));
 
-  MachO::linkedit_data_command DicLC = getDataInCodeLoadCommand();
-  DRI.p = reinterpret_cast<uintptr_t>(getPtr(this, DicLC.dataoff));
+  auto DicLC = getDataInCodeLoadCommand();
+  if (std::error_code EC = DicLC.getError())
+    report_fatal_error(EC.message());
+  DRI.p = reinterpret_cast<uintptr_t>(getPtr(this, DicLC->dataoff));
   return dice_iterator(DiceRef(DRI, this));
 }
 
@@ -1474,8 +1612,11 @@ dice_iterator MachOObjectFile::end_dices() const {
   if (!DataInCodeLoadCmd)
     return dice_iterator(DiceRef(DRI, this));
 
-  MachO::linkedit_data_command DicLC = getDataInCodeLoadCommand();
-  unsigned Offset = DicLC.dataoff + DicLC.datasize;
+  auto DicLC = getDataInCodeLoadCommand();
+  if (std::error_code EC = DicLC.getError())
+    report_fatal_error(EC.message());
+
+  unsigned Offset = DicLC->dataoff + DicLC->datasize;
   DRI.p = reinterpret_cast<uintptr_t>(getPtr(this, Offset));
   return dice_iterator(DiceRef(DRI, this));
 }
@@ -2105,6 +2246,8 @@ MachOObjectFile::getSectionFinalSegmentName(DataRefImpl Sec) const {
 
 ArrayRef<char>
 MachOObjectFile::getSectionRawName(DataRefImpl Sec) const {
+  if (Sec.d.a > Sections.size())
+    return ArrayRef<char>();
   const section_base *Base =
     reinterpret_cast<const section_base *>(Sections[Sec.d.a]);
   return makeArrayRef(Base->sectname);
@@ -2112,6 +2255,8 @@ MachOObjectFile::getSectionRawName(DataRefImpl Sec) const {
 
 ArrayRef<char>
 MachOObjectFile::getSectionRawFinalSegmentName(DataRefImpl Sec) const {
+  if (Sec.d.a > Sections.size())
+    return ArrayRef<char>();
   const section_base *Base =
     reinterpret_cast<const section_base *>(Sections[Sec.d.a]);
   return makeArrayRef(Base->segname);
@@ -2194,210 +2339,242 @@ MachOObjectFile::getRelocationSection(
   return SectionRef(DRI, this);
 }
 
-MachOObjectFile::LoadCommandInfo
+ErrorOr<MachOObjectFile::LoadCommandInfo>
 MachOObjectFile::getFirstLoadCommandInfo() const {
   MachOObjectFile::LoadCommandInfo Load;
 
   unsigned HeaderSize = is64Bit() ? sizeof(MachO::mach_header_64) :
                                     sizeof(MachO::mach_header);
   Load.Ptr = getPtr(this, HeaderSize);
-  Load.C = getStruct<MachO::load_command>(this, Load.Ptr);
+  auto C = getStruct<MachO::load_command>(this, Load.Ptr);
+  if (std::error_code EC = C.getError())
+    return EC;
+
+  Load.C = *C;
   return Load;
 }
 
-MachOObjectFile::LoadCommandInfo
+ErrorOr<MachOObjectFile::LoadCommandInfo>
 MachOObjectFile::getNextLoadCommandInfo(const LoadCommandInfo &L) const {
   MachOObjectFile::LoadCommandInfo Next;
   Next.Ptr = L.Ptr + L.C.cmdsize;
-  Next.C = getStruct<MachO::load_command>(this, Next.Ptr);
+
+  auto C = getStruct<MachO::load_command>(this, Next.Ptr);
+  if (std::error_code EC = C.getError())
+    return EC;
+
+  Next.C = *C;
   return Next;
 }
 
-MachO::section MachOObjectFile::getSection(DataRefImpl DRI) const {
+ErrorOr<MachO::section> MachOObjectFile::getSection(DataRefImpl DRI) const {
+  if (DRI.d.a > Sections.size())
+    return object_error::bad_offset;
   return getStruct<MachO::section>(this, Sections[DRI.d.a]);
 }
 
-MachO::section_64 MachOObjectFile::getSection64(DataRefImpl DRI) const {
+ErrorOr<MachO::section_64>
+MachOObjectFile::getSection64(DataRefImpl DRI) const {
+  if (DRI.d.a > Sections.size())
+    return object_error::bad_offset;
   return getStruct<MachO::section_64>(this, Sections[DRI.d.a]);
 }
 
-MachO::section MachOObjectFile::getSection(const LoadCommandInfo &L,
-                                           unsigned Index) const {
+ErrorOr<MachO::section> MachOObjectFile::getSection(const LoadCommandInfo &L,
+                                                    unsigned Index) const {
   const char *Sec = getSectionPtr(this, L, Index);
   return getStruct<MachO::section>(this, Sec);
 }
 
-MachO::section_64 MachOObjectFile::getSection64(const LoadCommandInfo &L,
-                                                unsigned Index) const {
+ErrorOr<MachO::section_64>
+MachOObjectFile::getSection64(const LoadCommandInfo &L, unsigned Index) const {
   const char *Sec = getSectionPtr(this, L, Index);
   return getStruct<MachO::section_64>(this, Sec);
 }
 
-MachO::nlist
+ErrorOr<MachO::nlist>
 MachOObjectFile::getSymbolTableEntry(DataRefImpl DRI) const {
   const char *P = reinterpret_cast<const char *>(DRI.p);
   return getStruct<MachO::nlist>(this, P);
 }
 
-MachO::nlist_64
+ErrorOr<MachO::nlist_64>
 MachOObjectFile::getSymbol64TableEntry(DataRefImpl DRI) const {
   const char *P = reinterpret_cast<const char *>(DRI.p);
   return getStruct<MachO::nlist_64>(this, P);
 }
 
-MachO::linkedit_data_command
+ErrorOr<MachO::linkedit_data_command>
 MachOObjectFile::getLinkeditDataLoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::linkedit_data_command>(this, L.Ptr);
 }
 
-MachO::segment_command
+ErrorOr<MachO::segment_command>
 MachOObjectFile::getSegmentLoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::segment_command>(this, L.Ptr);
 }
 
-MachO::segment_command_64
+ErrorOr<MachO::segment_command_64>
 MachOObjectFile::getSegment64LoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::segment_command_64>(this, L.Ptr);
 }
 
-MachO::linker_option_command
+ErrorOr<MachO::linker_option_command>
 MachOObjectFile::getLinkerOptionLoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::linker_option_command>(this, L.Ptr);
 }
 
-MachO::version_min_command
+ErrorOr<MachO::version_min_command>
 MachOObjectFile::getVersionMinLoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::version_min_command>(this, L.Ptr);
 }
 
-MachO::dylib_command
+ErrorOr<MachO::dylib_command>
 MachOObjectFile::getDylibIDLoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::dylib_command>(this, L.Ptr);
 }
 
-MachO::dyld_info_command
+ErrorOr<MachO::dyld_info_command>
 MachOObjectFile::getDyldInfoLoadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::dyld_info_command>(this, L.Ptr);
 }
 
-MachO::dylinker_command
+ErrorOr<MachO::dylinker_command>
 MachOObjectFile::getDylinkerCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::dylinker_command>(this, L.Ptr);
 }
 
-MachO::uuid_command
+ErrorOr<MachO::uuid_command>
 MachOObjectFile::getUuidCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::uuid_command>(this, L.Ptr);
 }
 
-MachO::rpath_command
+ErrorOr<MachO::rpath_command>
 MachOObjectFile::getRpathCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::rpath_command>(this, L.Ptr);
 }
 
-MachO::source_version_command
+ErrorOr<MachO::source_version_command>
 MachOObjectFile::getSourceVersionCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::source_version_command>(this, L.Ptr);
 }
 
-MachO::entry_point_command
+ErrorOr<MachO::entry_point_command>
 MachOObjectFile::getEntryPointCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::entry_point_command>(this, L.Ptr);
 }
 
-MachO::encryption_info_command
+ErrorOr<MachO::encryption_info_command>
 MachOObjectFile::getEncryptionInfoCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::encryption_info_command>(this, L.Ptr);
 }
 
-MachO::encryption_info_command_64
+ErrorOr<MachO::encryption_info_command_64>
 MachOObjectFile::getEncryptionInfoCommand64(const LoadCommandInfo &L) const {
   return getStruct<MachO::encryption_info_command_64>(this, L.Ptr);
 }
 
-MachO::sub_framework_command
+ErrorOr<MachO::sub_framework_command>
 MachOObjectFile::getSubFrameworkCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::sub_framework_command>(this, L.Ptr);
 }
 
-MachO::sub_umbrella_command
+ErrorOr<MachO::sub_umbrella_command>
 MachOObjectFile::getSubUmbrellaCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::sub_umbrella_command>(this, L.Ptr);
 }
 
-MachO::sub_library_command
+ErrorOr<MachO::sub_library_command>
 MachOObjectFile::getSubLibraryCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::sub_library_command>(this, L.Ptr);
 }
 
-MachO::sub_client_command
+ErrorOr<MachO::sub_client_command>
 MachOObjectFile::getSubClientCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::sub_client_command>(this, L.Ptr);
 }
 
-MachO::routines_command
+ErrorOr<MachO::routines_command>
 MachOObjectFile::getRoutinesCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::routines_command>(this, L.Ptr);
 }
 
-MachO::routines_command_64
+ErrorOr<MachO::routines_command_64>
 MachOObjectFile::getRoutinesCommand64(const LoadCommandInfo &L) const {
   return getStruct<MachO::routines_command_64>(this, L.Ptr);
 }
 
-MachO::thread_command
+ErrorOr<MachO::thread_command>
 MachOObjectFile::getThreadCommand(const LoadCommandInfo &L) const {
   return getStruct<MachO::thread_command>(this, L.Ptr);
 }
 
 MachO::any_relocation_info
 MachOObjectFile::getRelocation(DataRefImpl Rel) const {
+  std::error_code EC;
   DataRefImpl Sec;
   Sec.d.a = Rel.d.a;
   uint32_t Offset;
   if (is64Bit()) {
-    MachO::section_64 Sect = getSection64(Sec);
-    Offset = Sect.reloff;
+    auto Sect = getSection64(Sec);
+    if ((EC = Sect.getError()))
+      report_fatal_error(EC.message());
+    Offset = Sect->reloff;
   } else {
-    MachO::section Sect = getSection(Sec);
-    Offset = Sect.reloff;
+    auto Sect = getSection(Sec);
+    if ((EC = Sect.getError()))
+      report_fatal_error(EC.message());
+    Offset = Sect->reloff;
   }
 
   auto P = reinterpret_cast<const MachO::any_relocation_info *>(
       getPtr(this, Offset)) + Rel.d.b;
-  return getStruct<MachO::any_relocation_info>(
+  auto RelocInfo = getStruct<MachO::any_relocation_info>(
       this, reinterpret_cast<const char *>(P));
+  if ((EC = RelocInfo.getError()))
+    report_fatal_error(EC.message());
+  return *RelocInfo;
 }
 
-MachO::data_in_code_entry
+ErrorOr<MachO::data_in_code_entry>
 MachOObjectFile::getDice(DataRefImpl Rel) const {
   const char *P = reinterpret_cast<const char *>(Rel.p);
   return getStruct<MachO::data_in_code_entry>(this, P);
 }
 
+// Mach headers are special and we bail out if we can't read them
 MachO::mach_header MachOObjectFile::getHeader() const {
-  return getStruct<MachO::mach_header>(this, getPtr(this, 0));
+  auto Header = getStruct<MachO::mach_header>(this, getPtr(this, 0));
+  if (std::error_code EC = Header.getError())
+    report_fatal_error(EC.message());
+  return *Header;
 }
 
 MachO::mach_header_64 MachOObjectFile::getHeader64() const {
-  return getStruct<MachO::mach_header_64>(this, getPtr(this, 0));
+  auto Header = getStruct<MachO::mach_header_64>(this, getPtr(this, 0));
+  if (std::error_code EC = Header.getError())
+    report_fatal_error(EC.message());
+  return *Header;
 }
 
 uint32_t MachOObjectFile::getIndirectSymbolTableEntry(
                                              const MachO::dysymtab_command &DLC,
                                              unsigned Index) const {
   uint64_t Offset = DLC.indirectsymoff + Index * sizeof(uint32_t);
-  return getStruct<uint32_t>(this, getPtr(this, Offset));
+  auto Result = getStruct<uint32_t>(this, getPtr(this, Offset));
+  if (std::error_code EC = Result.getError())
+    report_fatal_error(EC.message());
+  return *Result;
 }
 
-MachO::data_in_code_entry
+ErrorOr<MachO::data_in_code_entry>
 MachOObjectFile::getDataInCodeTableEntry(uint32_t DataOffset,
                                          unsigned Index) const {
   uint64_t Offset = DataOffset + Index * sizeof(MachO::data_in_code_entry);
   return getStruct<MachO::data_in_code_entry>(this, getPtr(this, Offset));
 }
 
-MachO::symtab_command MachOObjectFile::getSymtabLoadCommand() const {
+ErrorOr<MachO::symtab_command> MachOObjectFile::getSymtabLoadCommand() const {
   if (SymtabLoadCmd)
     return getStruct<MachO::symtab_command>(this, SymtabLoadCmd);
 
@@ -2412,7 +2589,7 @@ MachO::symtab_command MachOObjectFile::getSymtabLoadCommand() const {
   return Cmd;
 }
 
-MachO::dysymtab_command MachOObjectFile::getDysymtabLoadCommand() const {
+ErrorOr<MachO::dysymtab_command> MachOObjectFile::getDysymtabLoadCommand() const {
   if (DysymtabLoadCmd)
     return getStruct<MachO::dysymtab_command>(this, DysymtabLoadCmd);
 
@@ -2441,7 +2618,7 @@ MachO::dysymtab_command MachOObjectFile::getDysymtabLoadCommand() const {
   return Cmd;
 }
 
-MachO::linkedit_data_command
+ErrorOr<MachO::linkedit_data_command>
 MachOObjectFile::getDataInCodeLoadCommand() const {
   if (DataInCodeLoadCmd)
     return getStruct<MachO::linkedit_data_command>(this, DataInCodeLoadCmd);
@@ -2459,55 +2636,60 @@ ArrayRef<uint8_t> MachOObjectFile::getDyldInfoRebaseOpcodes() const {
   if (!DyldInfoLoadCmd) 
     return ArrayRef<uint8_t>();
 
-  MachO::dyld_info_command DyldInfo 
-                   = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
+  auto DyldInfo = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
+  if (std::error_code EC = DyldInfo.getError())
+    report_fatal_error(EC.message());
   const uint8_t *Ptr = reinterpret_cast<const uint8_t*>(
-                                             getPtr(this, DyldInfo.rebase_off));
-  return ArrayRef<uint8_t>(Ptr, DyldInfo.rebase_size);
+                                             getPtr(this, DyldInfo->rebase_off));
+  return ArrayRef<uint8_t>(Ptr, DyldInfo->rebase_size);
 }
 
 ArrayRef<uint8_t> MachOObjectFile::getDyldInfoBindOpcodes() const {
-  if (!DyldInfoLoadCmd) 
+  if (!DyldInfoLoadCmd)
     return ArrayRef<uint8_t>();
 
-  MachO::dyld_info_command DyldInfo 
-                   = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
-  const uint8_t *Ptr = reinterpret_cast<const uint8_t*>(
-                                               getPtr(this, DyldInfo.bind_off));
-  return ArrayRef<uint8_t>(Ptr, DyldInfo.bind_size);
+  auto DyldInfo = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
+  if (std::error_code EC = DyldInfo.getError())
+    report_fatal_error(EC.message());
+  const uint8_t *Ptr =
+      reinterpret_cast<const uint8_t *>(getPtr(this, DyldInfo->bind_off));
+  return ArrayRef<uint8_t>(Ptr, DyldInfo->bind_size);
 }
 
 ArrayRef<uint8_t> MachOObjectFile::getDyldInfoWeakBindOpcodes() const {
-  if (!DyldInfoLoadCmd) 
+  if (!DyldInfoLoadCmd)
     return ArrayRef<uint8_t>();
 
-  MachO::dyld_info_command DyldInfo 
-                   = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
-  const uint8_t *Ptr = reinterpret_cast<const uint8_t*>(
-                                          getPtr(this, DyldInfo.weak_bind_off));
-  return ArrayRef<uint8_t>(Ptr, DyldInfo.weak_bind_size);
+  auto DyldInfo = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
+  if (std::error_code EC = DyldInfo.getError())
+    report_fatal_error(EC.message());
+  const uint8_t *Ptr =
+      reinterpret_cast<const uint8_t *>(getPtr(this, DyldInfo->weak_bind_off));
+  return ArrayRef<uint8_t>(Ptr, DyldInfo->weak_bind_size);
 }
 
 ArrayRef<uint8_t> MachOObjectFile::getDyldInfoLazyBindOpcodes() const {
-  if (!DyldInfoLoadCmd) 
+  if (!DyldInfoLoadCmd)
     return ArrayRef<uint8_t>();
 
-  MachO::dyld_info_command DyldInfo 
-                   = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
-  const uint8_t *Ptr = reinterpret_cast<const uint8_t*>(
-                                          getPtr(this, DyldInfo.lazy_bind_off));
-  return ArrayRef<uint8_t>(Ptr, DyldInfo.lazy_bind_size);
+  auto DyldInfo = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
+  if (std::error_code EC = DyldInfo.getError())
+    report_fatal_error(EC.message());
+  const uint8_t *Ptr =
+      reinterpret_cast<const uint8_t *>(getPtr(this, DyldInfo->lazy_bind_off));
+  return ArrayRef<uint8_t>(Ptr, DyldInfo->lazy_bind_size);
 }
 
 ArrayRef<uint8_t> MachOObjectFile::getDyldInfoExportsTrie() const {
-  if (!DyldInfoLoadCmd) 
+  if (!DyldInfoLoadCmd)
     return ArrayRef<uint8_t>();
 
-  MachO::dyld_info_command DyldInfo 
-                   = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
-  const uint8_t *Ptr = reinterpret_cast<const uint8_t*>(
-                                             getPtr(this, DyldInfo.export_off));
-  return ArrayRef<uint8_t>(Ptr, DyldInfo.export_size);
+  auto DyldInfo = getStruct<MachO::dyld_info_command>(this, DyldInfoLoadCmd);
+  if (std::error_code EC = DyldInfo.getError())
+    report_fatal_error(EC.message());
+  const uint8_t *Ptr =
+      reinterpret_cast<const uint8_t *>(getPtr(this, DyldInfo->export_off));
+  return ArrayRef<uint8_t>(Ptr, DyldInfo->export_size);
 }
 
 ArrayRef<uint8_t> MachOObjectFile::getUuid() const {
@@ -2518,9 +2700,11 @@ ArrayRef<uint8_t> MachOObjectFile::getUuid() const {
   return ArrayRef<uint8_t>(reinterpret_cast<const uint8_t *>(Ptr), 16);
 }
 
-StringRef MachOObjectFile::getStringTableData() const {
-  MachO::symtab_command S = getSymtabLoadCommand();
-  return getData().substr(S.stroff, S.strsize);
+ErrorOr<StringRef> MachOObjectFile::getStringTableData() const {
+  auto S = getSymtabLoadCommand();
+  if (std::error_code EC = S.getError())
+    return EC;
+  return getData().substr(S->stroff, S->strsize);
 }
 
 bool MachOObjectFile::is64Bit() const {
@@ -2564,4 +2748,3 @@ ObjectFile::createMachOObjectFile(MemoryBufferRef Buffer) {
     return EC;
   return std::move(Ret);
 }
-

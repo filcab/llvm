@@ -585,7 +585,8 @@ protected:
   std::error_code getSymbolAddress(DataRefImpl Symb,
                                    uint64_t &Res) const override;
   std::error_code getSymbolSize(DataRefImpl Symb, uint64_t &Res) const override;
-  uint32_t getSymbolFlags(DataRefImpl Symb) const override;
+  std::error_code getSymbolFlags(DataRefImpl Symb,
+                                 uint32_t &flags) const override;
   std::error_code getSymbolType(DataRefImpl Symb,
                                 SymbolRef::Type &Res) const override;
   std::error_code getSymbolSection(DataRefImpl Symb,
@@ -593,11 +594,13 @@ protected:
   void moveSectionNext(DataRefImpl &Sec) const override;
   std::error_code getSectionName(DataRefImpl Sec,
                                  StringRef &Res) const override;
-  uint64_t getSectionAddress(DataRefImpl Sec) const override;
-  uint64_t getSectionSize(DataRefImpl Sec) const override;
+  std::error_code getSectionAddress(DataRefImpl Sec,
+                                    uint64_t &Res) const override;
+  std::error_code getSectionSize(DataRefImpl Sec, uint64_t &Res) const override;
   std::error_code getSectionContents(DataRefImpl Sec,
                                      StringRef &Res) const override;
-  uint64_t getSectionAlignment(DataRefImpl Sec) const override;
+  std::error_code getSectionAlignment(DataRefImpl Sec,
+                                      uint64_t &Res) const override;
   bool isSectionText(DataRefImpl Sec) const override;
   bool isSectionData(DataRefImpl Sec) const override;
   bool isSectionBSS(DataRefImpl Sec) const override;
@@ -707,7 +710,8 @@ public:
   }
 
   std::error_code getSectionName(const coff_section *Sec, StringRef &Res) const;
-  uint64_t getSectionSize(const coff_section *Sec) const;
+  std::error_code getSectionSize(const coff_section *Sec,
+                                 uint64_t &Result) const;
   std::error_code getSectionContents(const coff_section *Sec,
                                      ArrayRef<uint8_t> &Res) const;
 

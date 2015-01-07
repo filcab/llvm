@@ -230,7 +230,10 @@ private:
     uint32_t AddrA = MachO.getScatteredRelocationValue(RE);
     section_iterator SAI = getSectionByAddress(MachO, AddrA);
     assert(SAI != MachO.section_end() && "Can't find section for address A");
-    uint64_t SectionABase = SAI->getAddress();
+    uint64_t SectionABase;
+    std::error_code EC = SAI->getAddress(SectionABase);
+    if (EC)
+      report_fatal_error(EC.message());
     uint64_t SectionAOffset = AddrA - SectionABase;
     SectionRef SectionA = *SAI;
     bool IsCode = SectionA.isText();
@@ -240,7 +243,10 @@ private:
     uint32_t AddrB = MachO.getScatteredRelocationValue(RE2);
     section_iterator SBI = getSectionByAddress(MachO, AddrB);
     assert(SBI != MachO.section_end() && "Can't find section for address B");
-    uint64_t SectionBBase = SBI->getAddress();
+    uint64_t SectionBBase;
+    EC = SBI->getAddress(SectionBBase);
+    if (EC)
+      report_fatal_error(EC.message());
     uint64_t SectionBOffset = AddrB - SectionBBase;
     SectionRef SectionB = *SBI;
     uint32_t SectionBID =

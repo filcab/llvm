@@ -206,35 +206,37 @@ std::error_code IRObjectFile::printSymbolName(raw_ostream &OS,
   return object_error::success;
 }
 
-uint32_t IRObjectFile::getSymbolFlags(DataRefImpl Symb) const {
+std::error_code IRObjectFile::getSymbolFlags(DataRefImpl Symb,
+                                             uint32_t &flags) const {
   const GlobalValue *GV = getGV(Symb);
 
   if (!GV) {
     unsigned Index = getAsmSymIndex(Symb);
     assert(Index <= AsmSymbols.size());
-    return AsmSymbols[Index].second;
+    flags = AsmSymbols[Index].second;
+    return object_error::success;
   }
 
-  uint32_t Res = BasicSymbolRef::SF_None;
+  flags = BasicSymbolRef::SF_None;
   if (GV->isDeclarationForLinker())
-    Res |= BasicSymbolRef::SF_Undefined;
+    flags |= BasicSymbolRef::SF_Undefined;
   if (GV->hasPrivateLinkage())
-    Res |= BasicSymbolRef::SF_FormatSpecific;
+    flags |= BasicSymbolRef::SF_FormatSpecific;
   if (!GV->hasLocalLinkage())
-    Res |= BasicSymbolRef::SF_Global;
+    flags |= BasicSymbolRef::SF_Global;
   if (GV->hasCommonLinkage())
-    Res |= BasicSymbolRef::SF_Common;
+    flags |= BasicSymbolRef::SF_Common;
   if (GV->hasLinkOnceLinkage() || GV->hasWeakLinkage())
-    Res |= BasicSymbolRef::SF_Weak;
+    flags |= BasicSymbolRef::SF_Weak;
 
   if (GV->getName().startswith("llvm."))
-    Res |= BasicSymbolRef::SF_FormatSpecific;
+    flags |= BasicSymbolRef::SF_FormatSpecific;
   else if (auto *Var = dyn_cast<GlobalVariable>(GV)) {
     if (Var->getSection() == StringRef("llvm.metadata"))
-      Res |= BasicSymbolRef::SF_FormatSpecific;
+      flags |= BasicSymbolRef::SF_FormatSpecific;
   }
 
-  return Res;
+  return object_error::success;
 }
 
 GlobalValue *IRObjectFile::getSymbolGV(DataRefImpl Symb) { return getGV(Symb); }

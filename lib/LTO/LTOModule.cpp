@@ -561,7 +561,13 @@ void LTOModule::addPotentialUndefinedSymbol(const object::BasicSymbolRef &Sym,
 bool LTOModule::parseSymbols(std::string &errMsg) {
   for (auto &Sym : IRFile->symbols()) {
     const GlobalValue *GV = IRFile->getSymbolGV(Sym.getRawDataRefImpl());
-    uint32_t Flags = Sym.getFlags();
+    uint32_t Flags;
+    std::error_code EC = Sym.getFlags(Flags);
+    if (EC) {
+      errMsg = EC.message();
+      return true;
+    }
+
     if (Flags & object::BasicSymbolRef::SF_FormatSpecific)
       continue;
 

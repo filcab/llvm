@@ -200,7 +200,7 @@ public:
 
   // MachO specific.
   std::error_code getIndirectName(DataRefImpl Symb, StringRef &Res) const;
-  unsigned getSectionType(SectionRef Sec) const;
+  std::error_code getSectionType(SectionRef Sec, unsigned &Type) const;
 
   std::error_code getSymbolAddress(DataRefImpl Symb,
                                    uint64_t &Res) const override;
@@ -209,18 +209,21 @@ public:
   std::error_code getSymbolSize(DataRefImpl Symb, uint64_t &Res) const override;
   std::error_code getSymbolType(DataRefImpl Symb,
                                 SymbolRef::Type &Res) const override;
-  uint32_t getSymbolFlags(DataRefImpl Symb) const override;
+  std::error_code getSymbolFlags(DataRefImpl Symb,
+                                 uint32_t &flags) const override;
   std::error_code getSymbolSection(DataRefImpl Symb,
                                    section_iterator &Res) const override;
 
   void moveSectionNext(DataRefImpl &Sec) const override;
   std::error_code getSectionName(DataRefImpl Sec,
                                  StringRef &Res) const override;
-  uint64_t getSectionAddress(DataRefImpl Sec) const override;
-  uint64_t getSectionSize(DataRefImpl Sec) const override;
+  std::error_code getSectionAddress(DataRefImpl Sec,
+                                    uint64_t &Res) const override;
+  std::error_code getSectionSize(DataRefImpl Sec, uint64_t &Res) const override;
   std::error_code getSectionContents(DataRefImpl Sec,
                                      StringRef &Res) const override;
-  uint64_t getSectionAlignment(DataRefImpl Sec) const override;
+  std::error_code getSectionAlignment(DataRefImpl Sec,
+                                      uint64_t &Res) const override;
   bool isSectionText(DataRefImpl Sec) const override;
   bool isSectionData(DataRefImpl Sec) const override;
   bool isSectionBSS(DataRefImpl Sec) const override;
@@ -329,72 +332,74 @@ public:
   SectionRef getRelocationSection(const MachO::any_relocation_info &RE) const;
 
   // Walk load commands.
-  LoadCommandInfo getFirstLoadCommandInfo() const;
-  LoadCommandInfo getNextLoadCommandInfo(const LoadCommandInfo &L) const;
+  ErrorOr<LoadCommandInfo> getFirstLoadCommandInfo() const;
+  ErrorOr<LoadCommandInfo>
+  getNextLoadCommandInfo(const LoadCommandInfo &L) const;
 
   // MachO specific structures.
-  MachO::section getSection(DataRefImpl DRI) const;
-  MachO::section_64 getSection64(DataRefImpl DRI) const;
-  MachO::section getSection(const LoadCommandInfo &L, unsigned Index) const;
-  MachO::section_64 getSection64(const LoadCommandInfo &L,unsigned Index) const;
-  MachO::nlist getSymbolTableEntry(DataRefImpl DRI) const;
-  MachO::nlist_64 getSymbol64TableEntry(DataRefImpl DRI) const;
+  ErrorOr<MachO::section> getSection(DataRefImpl DRI) const;
+  ErrorOr<MachO::section_64> getSection64(DataRefImpl DRI) const;
+  ErrorOr<MachO::section> getSection(const LoadCommandInfo &L,
+                                     unsigned Index) const;
+  ErrorOr<MachO::section_64> getSection64(const LoadCommandInfo &L,
+                                          unsigned Index) const;
+  ErrorOr<MachO::nlist> getSymbolTableEntry(DataRefImpl DRI) const;
+  ErrorOr<MachO::nlist_64> getSymbol64TableEntry(DataRefImpl DRI) const;
 
-  MachO::linkedit_data_command
+  ErrorOr<MachO::linkedit_data_command>
   getLinkeditDataLoadCommand(const LoadCommandInfo &L) const;
-  MachO::segment_command
+  ErrorOr<MachO::segment_command>
   getSegmentLoadCommand(const LoadCommandInfo &L) const;
-  MachO::segment_command_64
+  ErrorOr<MachO::segment_command_64>
   getSegment64LoadCommand(const LoadCommandInfo &L) const;
-  MachO::linker_option_command
+  ErrorOr<MachO::linker_option_command>
   getLinkerOptionLoadCommand(const LoadCommandInfo &L) const;
-  MachO::version_min_command
+  ErrorOr<MachO::version_min_command>
   getVersionMinLoadCommand(const LoadCommandInfo &L) const;
-  MachO::dylib_command
+  ErrorOr<MachO::dylib_command>
   getDylibIDLoadCommand(const LoadCommandInfo &L) const;
-  MachO::dyld_info_command
+  ErrorOr<MachO::dyld_info_command>
   getDyldInfoLoadCommand(const LoadCommandInfo &L) const;
-  MachO::dylinker_command
+  ErrorOr<MachO::dylinker_command>
   getDylinkerCommand(const LoadCommandInfo &L) const;
-  MachO::uuid_command
+  ErrorOr<MachO::uuid_command>
   getUuidCommand(const LoadCommandInfo &L) const;
-  MachO::rpath_command
+  ErrorOr<MachO::rpath_command>
   getRpathCommand(const LoadCommandInfo &L) const;
-  MachO::source_version_command
+  ErrorOr<MachO::source_version_command>
   getSourceVersionCommand(const LoadCommandInfo &L) const;
-  MachO::entry_point_command
+  ErrorOr<MachO::entry_point_command>
   getEntryPointCommand(const LoadCommandInfo &L) const;
-  MachO::encryption_info_command
+  ErrorOr<MachO::encryption_info_command>
   getEncryptionInfoCommand(const LoadCommandInfo &L) const;
-  MachO::encryption_info_command_64
+  ErrorOr<MachO::encryption_info_command_64>
   getEncryptionInfoCommand64(const LoadCommandInfo &L) const;
-  MachO::sub_framework_command
+  ErrorOr<MachO::sub_framework_command>
   getSubFrameworkCommand(const LoadCommandInfo &L) const;
-  MachO::sub_umbrella_command
+  ErrorOr<MachO::sub_umbrella_command>
   getSubUmbrellaCommand(const LoadCommandInfo &L) const;
-  MachO::sub_library_command
+  ErrorOr<MachO::sub_library_command>
   getSubLibraryCommand(const LoadCommandInfo &L) const;
-  MachO::sub_client_command
+  ErrorOr<MachO::sub_client_command>
   getSubClientCommand(const LoadCommandInfo &L) const;
-  MachO::routines_command
+  ErrorOr<MachO::routines_command>
   getRoutinesCommand(const LoadCommandInfo &L) const;
-  MachO::routines_command_64
+  ErrorOr<MachO::routines_command_64>
   getRoutinesCommand64(const LoadCommandInfo &L) const;
-  MachO::thread_command
+  ErrorOr<MachO::thread_command>
   getThreadCommand(const LoadCommandInfo &L) const;
 
   MachO::any_relocation_info getRelocation(DataRefImpl Rel) const;
-  MachO::data_in_code_entry getDice(DataRefImpl Rel) const;
+  ErrorOr<MachO::data_in_code_entry> getDice(DataRefImpl Rel) const;
   MachO::mach_header getHeader() const;
   MachO::mach_header_64 getHeader64() const;
-  uint32_t
-  getIndirectSymbolTableEntry(const MachO::dysymtab_command &DLC,
-                              unsigned Index) const;
-  MachO::data_in_code_entry getDataInCodeTableEntry(uint32_t DataOffset,
-                                                    unsigned Index) const;
-  MachO::symtab_command getSymtabLoadCommand() const;
-  MachO::dysymtab_command getDysymtabLoadCommand() const;
-  MachO::linkedit_data_command getDataInCodeLoadCommand() const;
+  uint32_t getIndirectSymbolTableEntry(const MachO::dysymtab_command &DLC,
+                                       unsigned Index) const;
+  ErrorOr<MachO::data_in_code_entry>
+  getDataInCodeTableEntry(uint32_t DataOffset, unsigned Index) const;
+  ErrorOr<MachO::symtab_command> getSymtabLoadCommand() const;
+  ErrorOr<MachO::dysymtab_command> getDysymtabLoadCommand() const;
+  ErrorOr<MachO::linkedit_data_command> getDataInCodeLoadCommand() const;
   ArrayRef<uint8_t> getDyldInfoRebaseOpcodes() const;
   ArrayRef<uint8_t> getDyldInfoBindOpcodes() const;
   ArrayRef<uint8_t> getDyldInfoWeakBindOpcodes() const;
@@ -402,7 +407,7 @@ public:
   ArrayRef<uint8_t> getDyldInfoExportsTrie() const;
   ArrayRef<uint8_t> getUuid() const;
 
-  StringRef getStringTableData() const;
+  ErrorOr<StringRef> getStringTableData() const;
   bool is64Bit() const;
   void ReadULEB128s(uint64_t Index, SmallVectorImpl<uint64_t> &Out) const;
 
@@ -466,25 +471,31 @@ inline void DiceRef::moveNext() {
 
 inline std::error_code DiceRef::getOffset(uint32_t &Result) const {
   const MachOObjectFile *MachOOF =
-    static_cast<const MachOObjectFile *>(OwningObject);
-  MachO::data_in_code_entry Dice = MachOOF->getDice(DicePimpl);
-  Result = Dice.offset;
+      static_cast<const MachOObjectFile *>(OwningObject);
+  auto Dice = MachOOF->getDice(DicePimpl);
+  if (std::error_code EC = Dice.getError())
+    return EC;
+  Result = Dice->offset;
   return object_error::success;
 }
 
 inline std::error_code DiceRef::getLength(uint16_t &Result) const {
   const MachOObjectFile *MachOOF =
     static_cast<const MachOObjectFile *>(OwningObject);
-  MachO::data_in_code_entry Dice = MachOOF->getDice(DicePimpl);
-  Result = Dice.length;
+  auto Dice = MachOOF->getDice(DicePimpl);
+  if (std::error_code EC = Dice.getError())
+    return EC;
+  Result = Dice->length;
   return object_error::success;
 }
 
 inline std::error_code DiceRef::getKind(uint16_t &Result) const {
   const MachOObjectFile *MachOOF =
     static_cast<const MachOObjectFile *>(OwningObject);
-  MachO::data_in_code_entry Dice = MachOOF->getDice(DicePimpl);
-  Result = Dice.kind;
+  auto Dice = MachOOF->getDice(DicePimpl);
+  if (std::error_code EC = Dice.getError())
+    return EC;
+  Result = Dice->kind;
   return object_error::success;
 }
 

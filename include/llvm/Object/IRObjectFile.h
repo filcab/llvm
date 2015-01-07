@@ -35,7 +35,8 @@ public:
   void moveSymbolNext(DataRefImpl &Symb) const override;
   std::error_code printSymbolName(raw_ostream &OS,
                                   DataRefImpl Symb) const override;
-  uint32_t getSymbolFlags(DataRefImpl Symb) const override;
+  std::error_code getSymbolFlags(DataRefImpl Symb,
+                                 uint32_t &flags) const override;
   GlobalValue *getSymbolGV(DataRefImpl Symb);
   const GlobalValue *getSymbolGV(DataRefImpl Symb) const {
     return const_cast<IRObjectFile *>(this)->getSymbolGV(Symb);

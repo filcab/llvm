@@ -649,7 +649,11 @@ DWARFContextInMemory::DWARFContextInMemory(const object::ObjectFile &Obj)
     }
 
     if (Section.relocation_begin() != Section.relocation_end()) {
-      uint64_t SectionSize = RelocatedSection->getSize();
+      uint64_t SectionSize;
+      std::error_code EC  = RelocatedSection->getSize(SectionSize);
+      if (EC)
+        report_fatal_error(EC.message());
+
       for (const RelocationRef &Reloc : Section.relocations()) {
         uint64_t Address;
         Reloc.getOffset(Address);

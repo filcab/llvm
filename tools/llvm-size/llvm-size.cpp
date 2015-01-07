@@ -124,67 +124,87 @@ static void PrintDarwinSectionSizes(MachOObjectFile *MachO) {
 
   uint32_t LoadCommandCount = MachO->getHeader().ncmds;
   uint32_t Filetype = MachO->getHeader().filetype;
-  MachOObjectFile::LoadCommandInfo Load = MachO->getFirstLoadCommandInfo();
+  auto Load = MachO->getFirstLoadCommandInfo();
+  if (std::error_code EC = Load.getError()) {
+    errs() << "error: " << EC.message() << "\n";
+    return;
+  }
 
   uint64_t total = 0;
   for (unsigned I = 0;; ++I) {
-    if (Load.C.cmd == MachO::LC_SEGMENT_64) {
-      MachO::segment_command_64 Seg = MachO->getSegment64LoadCommand(Load);
-      outs() << "Segment " << Seg.segname << ": "
-             << format(fmt.str().c_str(), Seg.vmsize);
-      if (DarwinLongFormat)
-        outs() << " (vmaddr 0x" << format("%" PRIx64, Seg.vmaddr) << " fileoff "
-               << Seg.fileoff << ")";
-      outs() << "\n";
-      total += Seg.vmsize;
-      uint64_t sec_total = 0;
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section_64 Sec = MachO->getSection64(Load, J);
-        if (Filetype == MachO::MH_OBJECT)
-          outs() << "\tSection (" << format("%.16s", &Sec.segname) << ", "
-                 << format("%.16s", &Sec.sectname) << "): ";
-        else
-          outs() << "\tSection " << format("%.16s", &Sec.sectname) << ": ";
-        outs() << format(fmt.str().c_str(), Sec.size);
-        if (DarwinLongFormat)
-          outs() << " (addr 0x" << format("%" PRIx64, Sec.addr) << " offset "
-                 << Sec.offset << ")";
-        outs() << "\n";
-        sec_total += Sec.size;
+    if (Load->C.cmd == MachO::LC_SEGMENT_64) {
+      auto Seg = MachO->getSegment64LoadCommand(*Load);
+      if (std::error_code EC = Seg.getError()) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
       }
-      if (Seg.nsects != 0)
+      outs() << "Segment " << Seg->segname << ": "
+             << format(fmt.str().c_str(), Seg->vmsize);
+      if (DarwinLongFormat)
+        outs() << " (vmaddr 0x" << format("%" PRIx64, Seg->vmaddr)
+               << " fileoff " << Seg->fileoff << ")";
+      outs() << "\n";
+      total += Seg->vmsize;
+      uint64_t sec_total = 0;
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = MachO->getSection64(*Load, J);
+        if (std::error_code EC = Sec.getError()) {
+          errs() << "error: " << EC.message() << "\n";
+          return;
+        }
+        if (Filetype == MachO::MH_OBJECT)
+          outs() << "\tSection (" << format("%.16s", &Sec->segname) << ", "
+                 << format("%.16s", &Sec->sectname) << "): ";
+        else
+          outs() << "\tSection " << format("%.16s", &Sec->sectname) << ": ";
+        outs() << format(fmt.str().c_str(), Sec->size);
+        if (DarwinLongFormat)
+          outs() << " (addr 0x" << format("%" PRIx64, Sec->addr) << " offset "
+                 << Sec->offset << ")";
+        outs() << "\n";
+        sec_total += Sec->size;
+      }
+      if (Seg->nsects != 0)
         outs() << "\ttotal " << format(fmt.str().c_str(), sec_total) << "\n";
-    } else if (Load.C.cmd == MachO::LC_SEGMENT) {
-      MachO::segment_command Seg = MachO->getSegmentLoadCommand(Load);
-      outs() << "Segment " << Seg.segname << ": "
-             << format(fmt.str().c_str(), Seg.vmsize);
-      if (DarwinLongFormat)
-        outs() << " (vmaddr 0x" << format("%" PRIx64, Seg.vmaddr) << " fileoff "
-               << Seg.fileoff << ")";
-      outs() << "\n";
-      total += Seg.vmsize;
-      uint64_t sec_total = 0;
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section Sec = MachO->getSection(Load, J);
-        if (Filetype == MachO::MH_OBJECT)
-          outs() << "\tSection (" << format("%.16s", &Sec.segname) << ", "
-                 << format("%.16s", &Sec.sectname) << "): ";
-        else
-          outs() << "\tSection " << format("%.16s", &Sec.sectname) << ": ";
-        outs() << format(fmt.str().c_str(), Sec.size);
-        if (DarwinLongFormat)
-          outs() << " (addr 0x" << format("%" PRIx64, Sec.addr) << " offset "
-                 << Sec.offset << ")";
-        outs() << "\n";
-        sec_total += Sec.size;
+    } else if (Load->C.cmd == MachO::LC_SEGMENT) {
+      auto Seg = MachO->getSegmentLoadCommand(*Load);
+      if (std::error_code EC = Seg.getError()) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
       }
-      if (Seg.nsects != 0)
+      outs() << "Segment " << Seg->segname << ": "
+             << format(fmt.str().c_str(), Seg->vmsize);
+      if (DarwinLongFormat)
+        outs() << " (vmaddr 0x" << format("%" PRIx64, Seg->vmaddr)
+               << " fileoff " << Seg->fileoff << ")";
+      outs() << "\n";
+      total += Seg->vmsize;
+      uint64_t sec_total = 0;
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = MachO->getSection(*Load, J);
+        if (std::error_code EC = Sec.getError()) {
+          errs() << "error: " << EC.message() << "\n";
+          return;
+        }
+        if (Filetype == MachO::MH_OBJECT)
+          outs() << "\tSection (" << format("%.16s", &Sec->segname) << ", "
+                 << format("%.16s", &Sec->sectname) << "): ";
+        else
+          outs() << "\tSection " << format("%.16s", &Sec->sectname) << ": ";
+        outs() << format(fmt.str().c_str(), Sec->size);
+        if (DarwinLongFormat)
+          outs() << " (addr 0x" << format("%" PRIx64, Sec->addr) << " offset "
+                 << Sec->offset << ")";
+        outs() << "\n";
+        sec_total += Sec->size;
+      }
+      if (Seg->nsects != 0)
         outs() << "\ttotal " << format(fmt.str().c_str(), sec_total) << "\n";
     }
     if (I == LoadCommandCount - 1)
       break;
     else
-      Load = MachO->getNextLoadCommandInfo(Load);
+      Load = MachO->getNextLoadCommandInfo(*Load);
   }
   outs() << "total " << format(fmt.str().c_str(), total) << "\n";
 }
@@ -195,70 +215,90 @@ static void PrintDarwinSectionSizes(MachOObjectFile *MachO) {
 /// produces the same output as darwin's size(1) default output.
 static void PrintDarwinSegmentSizes(MachOObjectFile *MachO) {
   uint32_t LoadCommandCount = MachO->getHeader().ncmds;
-  MachOObjectFile::LoadCommandInfo Load = MachO->getFirstLoadCommandInfo();
+  auto Load = MachO->getFirstLoadCommandInfo();
+  if (std::error_code EC = Load.getError()) {
+    errs() << "error: " << EC.message() << "\n";
+    return;
+  }
 
   uint64_t total_text = 0;
   uint64_t total_data = 0;
   uint64_t total_objc = 0;
   uint64_t total_others = 0;
   for (unsigned I = 0;; ++I) {
-    if (Load.C.cmd == MachO::LC_SEGMENT_64) {
-      MachO::segment_command_64 Seg = MachO->getSegment64LoadCommand(Load);
-      if (MachO->getHeader().filetype == MachO::MH_OBJECT) {
-        for (unsigned J = 0; J < Seg.nsects; ++J) {
-          MachO::section_64 Sec = MachO->getSection64(Load, J);
-          StringRef SegmentName = StringRef(Sec.segname);
-          if (SegmentName == "__TEXT")
-            total_text += Sec.size;
-          else if (SegmentName == "__DATA")
-            total_data += Sec.size;
-          else if (SegmentName == "__OBJC")
-            total_objc += Sec.size;
-          else
-            total_others += Sec.size;
-        }
-      } else {
-        StringRef SegmentName = StringRef(Seg.segname);
-        if (SegmentName == "__TEXT")
-          total_text += Seg.vmsize;
-        else if (SegmentName == "__DATA")
-          total_data += Seg.vmsize;
-        else if (SegmentName == "__OBJC")
-          total_objc += Seg.vmsize;
-        else
-          total_others += Seg.vmsize;
+    if (Load->C.cmd == MachO::LC_SEGMENT_64) {
+      auto Seg = MachO->getSegment64LoadCommand(*Load);
+      if (std::error_code EC = Seg.getError()) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
       }
-    } else if (Load.C.cmd == MachO::LC_SEGMENT) {
-      MachO::segment_command Seg = MachO->getSegmentLoadCommand(Load);
       if (MachO->getHeader().filetype == MachO::MH_OBJECT) {
-        for (unsigned J = 0; J < Seg.nsects; ++J) {
-          MachO::section Sec = MachO->getSection(Load, J);
-          StringRef SegmentName = StringRef(Sec.segname);
+        for (unsigned J = 0; J < Seg->nsects; ++J) {
+          auto Sec = MachO->getSection64(*Load, J);
+          if (std::error_code EC = Sec.getError()) {
+            errs() << "error: " << EC.message() << "\n";
+            return;
+          }
+          StringRef SegmentName = StringRef(Sec->segname);
           if (SegmentName == "__TEXT")
-            total_text += Sec.size;
+            total_text += Sec->size;
           else if (SegmentName == "__DATA")
-            total_data += Sec.size;
+            total_data += Sec->size;
           else if (SegmentName == "__OBJC")
-            total_objc += Sec.size;
+            total_objc += Sec->size;
           else
-            total_others += Sec.size;
+            total_others += Sec->size;
         }
       } else {
-        StringRef SegmentName = StringRef(Seg.segname);
+        StringRef SegmentName = StringRef(Seg->segname);
         if (SegmentName == "__TEXT")
-          total_text += Seg.vmsize;
+          total_text += Seg->vmsize;
         else if (SegmentName == "__DATA")
-          total_data += Seg.vmsize;
+          total_data += Seg->vmsize;
         else if (SegmentName == "__OBJC")
-          total_objc += Seg.vmsize;
+          total_objc += Seg->vmsize;
         else
-          total_others += Seg.vmsize;
+          total_others += Seg->vmsize;
+      }
+    } else if (Load->C.cmd == MachO::LC_SEGMENT) {
+      auto Seg = MachO->getSegmentLoadCommand(*Load);
+      if (std::error_code EC = Seg.getError()) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
+      }
+      if (MachO->getHeader().filetype == MachO::MH_OBJECT) {
+        for (unsigned J = 0; J < Seg->nsects; ++J) {
+          auto Sec = MachO->getSection(*Load, J);
+          if (std::error_code EC = Sec.getError()) {
+            errs() << "error: " << EC.message() << "\n";
+            return;
+          }
+          StringRef SegmentName = StringRef(Sec->segname);
+          if (SegmentName == "__TEXT")
+            total_text += Sec->size;
+          else if (SegmentName == "__DATA")
+            total_data += Sec->size;
+          else if (SegmentName == "__OBJC")
+            total_objc += Sec->size;
+          else
+            total_others += Sec->size;
+        }
+      } else {
+        StringRef SegmentName = StringRef(Seg->segname);
+        if (SegmentName == "__TEXT")
+          total_text += Seg->vmsize;
+        else if (SegmentName == "__DATA")
+          total_data += Seg->vmsize;
+        else if (SegmentName == "__OBJC")
+          total_objc += Seg->vmsize;
+        else
+          total_others += Seg->vmsize;
       }
     }
     if (I == LoadCommandCount - 1)
       break;
     else
-      Load = MachO->getNextLoadCommandInfo(Load);
+      Load = MachO->getNextLoadCommandInfo(*Load);
   }
   uint64_t total = total_text + total_data + total_objc + total_others;
 
@@ -297,13 +337,23 @@ static void PrintObjectSectionSizes(ObjectFile *Obj) {
     std::size_t max_size_len = strlen("size");
     std::size_t max_addr_len = strlen("addr");
     for (const SectionRef &Section : Obj->sections()) {
-      uint64_t size = Section.getSize();
+      uint64_t size;
+      std::error_code EC = Section.getSize(size);
+      if (EC) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
+      }
       total += size;
 
       StringRef name;
       if (error(Section.getName(name)))
         return;
-      uint64_t addr = Section.getAddress();
+      uint64_t addr;
+      EC = Section.getAddress(addr);
+      if (EC) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
+      }
       max_name_len = std::max(max_name_len, name.size());
       max_size_len = std::max(max_size_len, getNumLengthAsString(size));
       max_addr_len = std::max(max_addr_len, getNumLengthAsString(addr));
@@ -335,8 +385,18 @@ static void PrintObjectSectionSizes(ObjectFile *Obj) {
       StringRef name;
       if (error(Section.getName(name)))
         return;
-      uint64_t size = Section.getSize();
-      uint64_t addr = Section.getAddress();
+      uint64_t size;
+      std::error_code EC = Section.getSize(size);
+      if (EC) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
+      }
+      uint64_t addr;
+      EC = Section.getAddress(addr);
+      if (EC) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
+      }
       std::string namestr = name;
 
       outs() << format(fmt.str().c_str(), namestr.c_str(), size, addr);
@@ -357,7 +417,12 @@ static void PrintObjectSectionSizes(ObjectFile *Obj) {
 
     // Make one pass over the section table to calculate sizes.
     for (const SectionRef &Section : Obj->sections()) {
-      uint64_t size = Section.getSize();
+      uint64_t size;
+      std::error_code EC = Section.getSize(size);
+      if (EC) {
+        errs() << "error: " << EC.message() << "\n";
+        return;
+      }
       bool isText = Section.isText();
       bool isData = Section.isData();
       bool isBSS = Section.isBSS();

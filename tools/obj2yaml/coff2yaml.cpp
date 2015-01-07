@@ -106,9 +106,16 @@ void COFFDumper::dumpSections(unsigned NumSections) {
     COFFYAML::Section NewYAMLSection;
     ObjSection.getName(NewYAMLSection.Name);
     NewYAMLSection.Header.Characteristics = COFFSection->Characteristics;
-    NewYAMLSection.Header.VirtualAddress = ObjSection.getAddress();
     NewYAMLSection.Header.VirtualSize = COFFSection->VirtualSize;
-    NewYAMLSection.Alignment = ObjSection.getAlignment();
+    uint64_t Result;
+    std::error_code EC = ObjSection.getAddress(Result);
+    if (EC)
+      report_fatal_error(EC.message());
+    NewYAMLSection.Header.VirtualAddress = Result;
+    EC = ObjSection.getAlignment(Result);
+    if (EC)
+      report_fatal_error(EC.message());
+    NewYAMLSection.Alignment = Result;
 
     ArrayRef<uint8_t> sectionData;
     if (!ObjSection.isBSS())

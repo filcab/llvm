@@ -66,7 +66,12 @@ int convertForTestingMain(int argc, const char *argv[]) {
     return 1;
 
   // Get the contents of the given sections.
-  uint64_t ProfileNamesAddress = ProfileNames.getAddress();
+  uint64_t ProfileNamesAddress ;
+  std::error_code EC = ProfileNames.getAddress(ProfileNamesAddress);
+  if (EC) {
+    errs() << "error: " << EC.message() << "\n";
+    return 1;
+  }
   StringRef CoverageMappingData;
   StringRef ProfileNamesData;
   if (CoverageMapping.getContents(CoverageMappingData) ||

@@ -103,7 +103,7 @@ public:
   std::error_code printName(raw_ostream &OS) const;
 
   /// Get symbol flags (bitwise OR of SymbolRef::Flags)
-  uint32_t getFlags() const;
+  std::error_code getFlags(uint32_t &flags) const;
 
   DataRefImpl getRawDataRefImpl() const;
   const SymbolicFile *getObject() const;
@@ -124,7 +124,8 @@ public:
   virtual std::error_code printSymbolName(raw_ostream &OS,
                                           DataRefImpl Symb) const = 0;
 
-  virtual uint32_t getSymbolFlags(DataRefImpl Symb) const = 0;
+  virtual std::error_code getSymbolFlags(DataRefImpl Symb,
+                                         uint32_t &flags) const = 0;
 
   virtual basic_symbol_iterator symbol_begin_impl() const = 0;
 
@@ -179,8 +180,8 @@ inline std::error_code BasicSymbolRef::printName(raw_ostream &OS) const {
   return OwningObject->printSymbolName(OS, SymbolPimpl);
 }
 
-inline uint32_t BasicSymbolRef::getFlags() const {
-  return OwningObject->getSymbolFlags(SymbolPimpl);
+inline std::error_code BasicSymbolRef::getFlags(uint32_t &flags) const {
+  return OwningObject->getSymbolFlags(SymbolPimpl, flags);
 }
 
 inline DataRefImpl BasicSymbolRef::getRawDataRefImpl() const {

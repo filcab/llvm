@@ -57,7 +57,9 @@ ModuleInfo::ModuleInfo(ObjectFile *Obj, DIContext *DICtx)
         if (!error(Section->getContents(Data))) {
           OpdExtractor.reset(new DataExtractor(Data, Module->isLittleEndian(),
                                                Module->getBytesInAddress()));
-          OpdAddress = Section->getAddress();
+          std::error_code EC = Section->getAddress(OpdAddress);
+          if (EC)
+            report_fatal_error(EC.message());
         }
         break;
       }

@@ -224,30 +224,37 @@ static void getSectionsAndSymbols(const MachO::mach_header Header,
     Sections.push_back(Section);
   }
 
-  MachOObjectFile::LoadCommandInfo Command =
-      MachOObj->getFirstLoadCommandInfo();
+  std::error_code EC;
+  auto Command = MachOObj->getFirstLoadCommandInfo();
+  if ((EC = Command.getError()))
+    report_fatal_error(EC.message());
+
   bool BaseSegmentAddressSet = false;
   for (unsigned i = 0;; ++i) {
-    if (Command.C.cmd == MachO::LC_FUNCTION_STARTS) {
+    if (Command->C.cmd == MachO::LC_FUNCTION_STARTS) {
       // We found a function starts segment, parse the addresses for later
       // consumption.
-      MachO::linkedit_data_command LLC =
-          MachOObj->getLinkeditDataLoadCommand(Command);
+      auto LLC = MachOObj->getLinkeditDataLoadCommand(*Command);
+      if (std::error_code EC = LLC.getError())
+        report_fatal_error(EC.message());
 
-      MachOObj->ReadULEB128s(LLC.dataoff, FoundFns);
-    } else if (Command.C.cmd == MachO::LC_SEGMENT) {
-      MachO::segment_command SLC = MachOObj->getSegmentLoadCommand(Command);
-      StringRef SegName = SLC.segname;
+      MachOObj->ReadULEB128s(LLC->dataoff, FoundFns);
+    } else if (Command->C.cmd == MachO::LC_SEGMENT) {
+      auto SLC = MachOObj->getSegmentLoadCommand(*Command);
+      if (std::error_code EC = SLC.getError())
+        report_fatal_error(EC.message());
+
+      StringRef SegName = SLC->segname;
       if (!BaseSegmentAddressSet && SegName != "__PAGEZERO") {
         BaseSegmentAddressSet = true;
-        BaseSegmentAddress = SLC.vmaddr;
+        BaseSegmentAddress = SLC->vmaddr;
       }
     }
 
     if (i == Header.ncmds - 1)
       break;
     else
-      Command = MachOObj->getNextLoadCommandInfo(Command);
+      Command = MachOObj->getNextLoadCommandInfo(*Command);
   }
 }
 
@@ -532,8 +539,11 @@ int SymbolizerGetOpInfo(void *DisInfo, uint64_t Pc, uint64_t Offset,
       return 0;
     // First search the section's relocation entries (if any) for an entry
     // for this section offset.
-    uint32_t sect_addr = info->S.getAddress();
-    uint32_t sect_offset = (Pc + Offset) - sect_addr;
+    uint64_t sect_addr;
+    std::error_code EC = info->S.getAddress(sect_addr);
+    if (EC)
+      report_fatal_error(EC.message());
+    uint64_t sect_offset = (Pc + Offset) - sect_addr;
     bool reloc_found = false;
     DataRefImpl Rel;
     MachO::any_relocation_info RE;
@@ -611,7 +621,10 @@ int SymbolizerGetOpInfo(void *DisInfo, uint64_t Pc, uint64_t Offset,
       return 0;
     // First search the section's relocation entries (if any) for an entry
     // for this section offset.
-    uint64_t sect_addr = info->S.getAddress();
+    uint64_t sect_addr;
+    std::error_code EC = info->S.getAddress(sect_addr);
+    if (EC)
+      report_fatal_error(EC.message());
     uint64_t sect_offset = (Pc + Offset) - sect_addr;
     bool reloc_found = false;
     DataRefImpl Rel;
@@ -677,8 +690,11 @@ int SymbolizerGetOpInfo(void *DisInfo, uint64_t Pc, uint64_t Offset,
       return 0;
     // First search the section's relocation entries (if any) for an entry
     // for this section offset.
-    uint32_t sect_addr = info->S.getAddress();
-    uint32_t sect_offset = (Pc + Offset) - sect_addr;
+    uint64_t sect_addr;
+    std::error_code EC = info->S.getAddress(sect_addr);
+    if (EC)
+      report_fatal_error(EC.message());
+    uint64_t sect_offset = (Pc + Offset) - sect_addr;
     bool reloc_found = false;
     DataRefImpl Rel;
     MachO::any_relocation_info RE;
@@ -829,7 +845,10 @@ int SymbolizerGetOpInfo(void *DisInfo, uint64_t Pc, uint64_t Offset,
       return 0;
     // First search the section's relocation entries (if any) for an entry
     // for this section offset.
-    uint64_t sect_addr = info->S.getAddress();
+    uint64_t sect_addr;
+    std::error_code EC = info->S.getAddress(sect_addr);
+    if (EC)
+      report_fatal_error(EC.message());
     uint64_t sect_offset = (Pc + Offset) - sect_addr;
     bool reloc_found = false;
     DataRefImpl Rel;
@@ -914,18 +933,26 @@ int SymbolizerGetOpInfo(void *DisInfo, uint64_t Pc, uint64_t Offset,
 const char *GuessCstringPointer(uint64_t ReferenceValue,
                                 struct DisassembleInfo *info) {
   uint32_t LoadCommandCount = info->O->getHeader().ncmds;
-  MachOObjectFile::LoadCommandInfo Load = info->O->getFirstLoadCommandInfo();
+  auto Load = info->O->getFirstLoadCommandInfo();
+  if (Load.getError())
+    return nullptr;
+
   for (unsigned I = 0;; ++I) {
-    if (Load.C.cmd == MachO::LC_SEGMENT_64) {
-      MachO::segment_command_64 Seg = info->O->getSegment64LoadCommand(Load);
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section_64 Sec = info->O->getSection64(Load, J);
-        uint32_t section_type = Sec.flags & MachO::SECTION_TYPE;
+    if (Load->C.cmd == MachO::LC_SEGMENT_64) {
+      auto Seg = info->O->getSegment64LoadCommand(*Load);
+      if (Seg.getError())
+        return nullptr;
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = info->O->getSection64(*Load, J);
+        if (Sec.getError())
+          return nullptr;
+
+        uint32_t section_type = Sec->flags & MachO::SECTION_TYPE;
         if (section_type == MachO::S_CSTRING_LITERALS &&
-            ReferenceValue >= Sec.addr &&
-            ReferenceValue < Sec.addr + Sec.size) {
-          uint64_t sect_offset = ReferenceValue - Sec.addr;
-          uint64_t object_offset = Sec.offset + sect_offset;
+            ReferenceValue >= Sec->addr &&
+            ReferenceValue < Sec->addr + Sec->size) {
+          uint64_t sect_offset = ReferenceValue - Sec->addr;
+          uint64_t object_offset = Sec->offset + sect_offset;
           StringRef MachOContents = info->O->getData();
           uint64_t object_size = MachOContents.size();
           const char *object_addr = (const char *)MachOContents.data();
@@ -937,16 +964,21 @@ const char *GuessCstringPointer(uint64_t ReferenceValue,
           }
         }
       }
-    } else if (Load.C.cmd == MachO::LC_SEGMENT) {
-      MachO::segment_command Seg = info->O->getSegmentLoadCommand(Load);
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section Sec = info->O->getSection(Load, J);
-        uint32_t section_type = Sec.flags & MachO::SECTION_TYPE;
+    } else if (Load->C.cmd == MachO::LC_SEGMENT) {
+      auto Seg = info->O->getSegmentLoadCommand(*Load);
+      if (Seg.getError())
+        return nullptr;
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = info->O->getSection(*Load, J);
+        if (Sec.getError())
+          return nullptr;
+
+        uint32_t section_type = Sec->flags & MachO::SECTION_TYPE;
         if (section_type == MachO::S_CSTRING_LITERALS &&
-            ReferenceValue >= Sec.addr &&
-            ReferenceValue < Sec.addr + Sec.size) {
-          uint64_t sect_offset = ReferenceValue - Sec.addr;
-          uint64_t object_offset = Sec.offset + sect_offset;
+            ReferenceValue >= Sec->addr &&
+            ReferenceValue < Sec->addr + Sec->size) {
+          uint64_t sect_offset = ReferenceValue - Sec->addr;
+          uint64_t object_offset = Sec->offset + sect_offset;
           StringRef MachOContents = info->O->getData();
           uint64_t object_size = MachOContents.size();
           const char *object_addr = (const char *)MachOContents.data();
@@ -962,7 +994,7 @@ const char *GuessCstringPointer(uint64_t ReferenceValue,
     if (I == LoadCommandCount - 1)
       break;
     else
-      Load = info->O->getNextLoadCommandInfo(Load);
+      Load = info->O->getNextLoadCommandInfo(*Load);
   }
   return nullptr;
 }
@@ -974,34 +1006,47 @@ const char *GuessCstringPointer(uint64_t ReferenceValue,
 static const char *GuessIndirectSymbol(uint64_t ReferenceValue,
                                        struct DisassembleInfo *info) {
   uint32_t LoadCommandCount = info->O->getHeader().ncmds;
-  MachOObjectFile::LoadCommandInfo Load = info->O->getFirstLoadCommandInfo();
-  MachO::dysymtab_command Dysymtab = info->O->getDysymtabLoadCommand();
-  MachO::symtab_command Symtab = info->O->getSymtabLoadCommand();
+  auto Load = info->O->getFirstLoadCommandInfo();
+  if (Load.getError())
+    return nullptr;
+
+  auto Dysymtab = info->O->getDysymtabLoadCommand();
+  if (Dysymtab.getError())
+    return nullptr;
+  auto Symtab = info->O->getSymtabLoadCommand();
+  if (Symtab.getError())
+    return nullptr;
+
   for (unsigned I = 0;; ++I) {
-    if (Load.C.cmd == MachO::LC_SEGMENT_64) {
-      MachO::segment_command_64 Seg = info->O->getSegment64LoadCommand(Load);
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section_64 Sec = info->O->getSection64(Load, J);
-        uint32_t section_type = Sec.flags & MachO::SECTION_TYPE;
+    if (Load->C.cmd == MachO::LC_SEGMENT_64) {
+      auto Seg = info->O->getSegment64LoadCommand(*Load);
+      if (Seg.getError())
+        return nullptr;
+
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = info->O->getSection64(*Load, J);
+        if (Sec.getError())
+          return nullptr;
+        uint32_t section_type = Sec->flags & MachO::SECTION_TYPE;
         if ((section_type == MachO::S_NON_LAZY_SYMBOL_POINTERS ||
              section_type == MachO::S_LAZY_SYMBOL_POINTERS ||
              section_type == MachO::S_LAZY_DYLIB_SYMBOL_POINTERS ||
              section_type == MachO::S_THREAD_LOCAL_VARIABLE_POINTERS ||
              section_type == MachO::S_SYMBOL_STUBS) &&
-            ReferenceValue >= Sec.addr &&
-            ReferenceValue < Sec.addr + Sec.size) {
+            ReferenceValue >= Sec->addr &&
+            ReferenceValue < Sec->addr + Sec->size) {
           uint32_t stride;
           if (section_type == MachO::S_SYMBOL_STUBS)
-            stride = Sec.reserved2;
+            stride = Sec->reserved2;
           else
             stride = 8;
           if (stride == 0)
             return nullptr;
-          uint32_t index = Sec.reserved1 + (ReferenceValue - Sec.addr) / stride;
-          if (index < Dysymtab.nindirectsyms) {
+          uint32_t index = Sec->reserved1 + (ReferenceValue - Sec->addr) / stride;
+          if (index < Dysymtab->nindirectsyms) {
             uint32_t indirect_symbol =
-                info->O->getIndirectSymbolTableEntry(Dysymtab, index);
-            if (indirect_symbol < Symtab.nsyms) {
+                info->O->getIndirectSymbolTableEntry(*Dysymtab, index);
+            if (indirect_symbol < Symtab->nsyms) {
               symbol_iterator Sym = info->O->getSymbolByIndex(indirect_symbol);
               SymbolRef Symbol = *Sym;
               StringRef SymName;
@@ -1012,30 +1057,35 @@ static const char *GuessIndirectSymbol(uint64_t ReferenceValue,
           }
         }
       }
-    } else if (Load.C.cmd == MachO::LC_SEGMENT) {
-      MachO::segment_command Seg = info->O->getSegmentLoadCommand(Load);
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section Sec = info->O->getSection(Load, J);
-        uint32_t section_type = Sec.flags & MachO::SECTION_TYPE;
+    } else if (Load->C.cmd == MachO::LC_SEGMENT) {
+      auto Seg = info->O->getSegmentLoadCommand(*Load);
+      if (Seg.getError())
+        return nullptr;
+
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = info->O->getSection(*Load, J);
+        if (Sec.getError())
+          return nullptr;
+        uint32_t section_type = Sec->flags & MachO::SECTION_TYPE;
         if ((section_type == MachO::S_NON_LAZY_SYMBOL_POINTERS ||
              section_type == MachO::S_LAZY_SYMBOL_POINTERS ||
              section_type == MachO::S_LAZY_DYLIB_SYMBOL_POINTERS ||
              section_type == MachO::S_THREAD_LOCAL_VARIABLE_POINTERS ||
              section_type == MachO::S_SYMBOL_STUBS) &&
-            ReferenceValue >= Sec.addr &&
-            ReferenceValue < Sec.addr + Sec.size) {
+            ReferenceValue >= Sec->addr &&
+            ReferenceValue < Sec->addr + Sec->size) {
           uint32_t stride;
           if (section_type == MachO::S_SYMBOL_STUBS)
-            stride = Sec.reserved2;
+            stride = Sec->reserved2;
           else
             stride = 4;
           if (stride == 0)
             return nullptr;
-          uint32_t index = Sec.reserved1 + (ReferenceValue - Sec.addr) / stride;
-          if (index < Dysymtab.nindirectsyms) {
+          uint32_t index = Sec->reserved1 + (ReferenceValue - Sec->addr) / stride;
+          if (index < Dysymtab->nindirectsyms) {
             uint32_t indirect_symbol =
-                info->O->getIndirectSymbolTableEntry(Dysymtab, index);
-            if (indirect_symbol < Symtab.nsyms) {
+                info->O->getIndirectSymbolTableEntry(*Dysymtab, index);
+            if (indirect_symbol < Symtab->nsyms) {
               symbol_iterator Sym = info->O->getSymbolByIndex(indirect_symbol);
               SymbolRef Symbol = *Sym;
               StringRef SymName;
@@ -1050,7 +1100,7 @@ static const char *GuessIndirectSymbol(uint64_t ReferenceValue,
     if (I == LoadCommandCount - 1)
       break;
     else
-      Load = info->O->getNextLoadCommandInfo(Load);
+      Load = info->O->getNextLoadCommandInfo(*Load);
   }
   return nullptr;
 }
@@ -1138,21 +1188,28 @@ static uint64_t GuessPointerPointer(uint64_t ReferenceValue,
   msgref = false;
   cfstring = false;
   uint32_t LoadCommandCount = info->O->getHeader().ncmds;
-  MachOObjectFile::LoadCommandInfo Load = info->O->getFirstLoadCommandInfo();
+  auto Load = info->O->getFirstLoadCommandInfo();
+  if (Load.getError())
+    return 0;
+
   for (unsigned I = 0;; ++I) {
-    if (Load.C.cmd == MachO::LC_SEGMENT_64) {
-      MachO::segment_command_64 Seg = info->O->getSegment64LoadCommand(Load);
-      for (unsigned J = 0; J < Seg.nsects; ++J) {
-        MachO::section_64 Sec = info->O->getSection64(Load, J);
-        if ((strncmp(Sec.sectname, "__objc_selrefs", 16) == 0 ||
-             strncmp(Sec.sectname, "__objc_classrefs", 16) == 0 ||
-             strncmp(Sec.sectname, "__objc_superrefs", 16) == 0 ||
-             strncmp(Sec.sectname, "__objc_msgrefs", 16) == 0 ||
-             strncmp(Sec.sectname, "__cfstring", 16) == 0) &&
-            ReferenceValue >= Sec.addr &&
-            ReferenceValue < Sec.addr + Sec.size) {
-          uint64_t sect_offset = ReferenceValue - Sec.addr;
-          uint64_t object_offset = Sec.offset + sect_offset;
+    if (Load->C.cmd == MachO::LC_SEGMENT_64) {
+      auto Seg = info->O->getSegment64LoadCommand(*Load);
+      if (Seg.getError())
+        return 0;
+      for (unsigned J = 0; J < Seg->nsects; ++J) {
+        auto Sec = info->O->getSection64(*Load, J);
+        if (Sec.getError())
+          return 0;
+        if ((strncmp(Sec->sectname, "__objc_selrefs", 16) == 0 ||
+             strncmp(Sec->sectname, "__objc_classrefs", 16) == 0 ||
+             strncmp(Sec->sectname, "__objc_superrefs", 16) == 0 ||
+             strncmp(Sec->sectname, "__objc_msgrefs", 16) == 0 ||
+             strncmp(Sec->sectname, "__cfstring", 16) == 0) &&
+            ReferenceValue >= Sec->addr &&
+            ReferenceValue < Sec->addr + Sec->size) {
+          uint64_t sect_offset = ReferenceValue - Sec->addr;
+          uint64_t object_offset = Sec->offset + sect_offset;
           StringRef MachOContents = info->O->getData();
           uint64_t object_size = MachOContents.size();
           const char *object_addr = (const char *)MachOContents.data();
@@ -1162,19 +1219,19 @@ static uint64_t GuessPointerPointer(uint64_t ReferenceValue,
                    sizeof(uint64_t));
             if (info->O->isLittleEndian() != sys::IsLittleEndianHost)
               sys::swapByteOrder(pointer_value);
-            if (strncmp(Sec.sectname, "__objc_selrefs", 16) == 0)
+            if (strncmp(Sec->sectname, "__objc_selrefs", 16) == 0)
               selref = true;
-            else if (strncmp(Sec.sectname, "__objc_classrefs", 16) == 0 ||
-                     strncmp(Sec.sectname, "__objc_superrefs", 16) == 0)
+            else if (strncmp(Sec->sectname, "__objc_classrefs", 16) == 0 ||
+                     strncmp(Sec->sectname, "__objc_superrefs", 16) == 0)
               classref = true;
-            else if (strncmp(Sec.sectname, "__objc_msgrefs", 16) == 0 &&
-                     ReferenceValue + 8 < Sec.addr + Sec.size) {
+            else if (strncmp(Sec->sectname, "__objc_msgrefs", 16) == 0 &&
+                     ReferenceValue + 8 < Sec->addr + Sec->size) {
               msgref = true;
               memcpy(&pointer_value, object_addr + object_offset + 8,
                      sizeof(uint64_t));
               if (info->O->isLittleEndian() != sys::IsLittleEndianHost)
                 sys::swapByteOrder(pointer_value);
-            } else if (strncmp(Sec.sectname, "__cfstring", 16) == 0)
+            } else if (strncmp(Sec->sectname, "__cfstring", 16) == 0)
               cfstring = true;
             return pointer_value;
           } else {
@@ -1187,7 +1244,7 @@ static uint64_t GuessPointerPointer(uint64_t ReferenceValue,
     if (I == LoadCommandCount - 1)
       break;
     else
-      Load = info->O->getNextLoadCommandInfo(Load);
+      Load = info->O->getNextLoadCommandInfo(*Load);
   }
   return 0;
 }
@@ -1203,8 +1260,16 @@ const char *get_pointer_64(uint64_t Address, uint32_t &offset, uint32_t &left,
   left = 0;
   S = SectionRef();
   for (unsigned SectIdx = 0; SectIdx != info->Sections->size(); SectIdx++) {
-    uint64_t SectAddress = ((*(info->Sections))[SectIdx]).getAddress();
-    uint64_t SectSize = ((*(info->Sections))[SectIdx]).getSize();
+    uint64_t SectAddress;
+    std::error_code EC = ((*(info->Sections))[SectIdx]).getAddress(SectAddress);
+    // TODO: Maybe deal with EC (possibly malformed files)
+    if (EC)
+      return nullptr;
+    uint64_t SectSize;
+    EC = ((*(info->Sections))[SectIdx]).getSize(SectSize);
+    if (EC)
+      return nullptr;
+
     if (Address >= SectAddress && Address < SectAddress + SectSize) {
       S = (*(info->Sections))[SectIdx];
       offset = Address - SectAddress;
@@ -1477,7 +1542,10 @@ const char *GuessLiteralPointer(uint64_t ReferenceValue, uint64_t ReferencePC,
                                 uint64_t *ReferenceType,
                                 struct DisassembleInfo *info) {
   // First see if there is an external relocation entry at the ReferencePC.
-  uint64_t sect_addr = info->S.getAddress();
+  uint64_t sect_addr;
+  std::error_code EC = info->S.getAddress(sect_addr);
+  if (EC)
+    report_fatal_error(EC.message());
   uint64_t sect_offset = ReferencePC - sect_addr;
   bool reloc_found = false;
   DataRefImpl Rel;
@@ -1920,8 +1988,11 @@ static void DisassembleInputMachO2(StringRef Filename, MachOObjectFile *MachOOF,
 
   // Build a data in code table that is sorted on by the address of each entry.
   uint64_t BaseAddress = 0;
-  if (Header.filetype == MachO::MH_OBJECT)
-    BaseAddress = Sections[0].getAddress();
+  if (Header.filetype == MachO::MH_OBJECT) {
+    std::error_code EC = Sections[0].getAddress(BaseAddress);
+    if (EC)
+      report_fatal_error(EC.message());
+  }
   else
     BaseAddress = BaseSegmentAddress;
   DiceTable Dices;
@@ -1990,7 +2061,12 @@ static void DisassembleInputMachO2(StringRef Filename, MachOObjectFile *MachOOF,
     Sections[SectIdx].getContents(BytesStr);
     ArrayRef<uint8_t> Bytes(reinterpret_cast<const uint8_t *>(BytesStr.data()),
                             BytesStr.size());
-    uint64_t SectAddress = Sections[SectIdx].getAddress();
+    uint64_t SectAddress;
+    std::error_code EC = Sections[SectIdx].getAddress(SectAddress);
+    if (EC) {
+      errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+      return;
+    }
 
     bool symbolTableWorked = false;
 
@@ -1999,7 +2075,12 @@ static void DisassembleInputMachO2(StringRef Filename, MachOObjectFile *MachOOF,
     for (const RelocationRef &Reloc : Sections[SectIdx].relocations()) {
       uint64_t RelocOffset;
       Reloc.getOffset(RelocOffset);
-      uint64_t SectionAddress = Sections[SectIdx].getAddress();
+      uint64_t SectionAddress;
+      std::error_code EC = Sections[SectIdx].getAddress(SectionAddress);
+      if (EC) {
+        errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+        return;
+      }
       RelocOffset -= SectionAddress;
 
       symbol_iterator RelocSym = Reloc.getSymbol();
@@ -2067,7 +2148,12 @@ static void DisassembleInputMachO2(StringRef Filename, MachOObjectFile *MachOOF,
 
       // Start at the address of the symbol relative to the section's address.
       uint64_t Start = 0;
-      uint64_t SectionAddress = Sections[SectIdx].getAddress();
+      uint64_t SectionAddress;
+      std::error_code EC = Sections[SectIdx].getAddress(SectionAddress);
+      if (EC) {
+        errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+        return;
+      }
       Symbols[SymIdx].getAddress(Start);
       Start -= SectionAddress;
 
@@ -2089,15 +2175,28 @@ static void DisassembleInputMachO2(StringRef Filename, MachOObjectFile *MachOOF,
         ++NextSymIdx;
       }
 
-      uint64_t SectSize = Sections[SectIdx].getSize();
+      uint64_t SectSize;
+      EC = Sections[SectIdx].getSize(SectSize);
+      if (EC) {
+        errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+        return;
+      }
+
       uint64_t End = containsNextSym ? NextSym : SectSize;
       uint64_t Size;
 
       symbolTableWorked = true;
 
       DataRefImpl Symb = Symbols[SymIdx].getRawDataRefImpl();
+      uint32_t Flags;
+      EC = MachOOF->getSymbolFlags(Symb, Flags);
+      if (EC) {
+        errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+        return;
+      }
+
       bool isThumb =
-          (MachOOF->getSymbolFlags(Symb) & SymbolRef::SF_Thumb) && ThumbTarget;
+          (Flags & SymbolRef::SF_Thumb) && ThumbTarget;
 
       outs() << SymName << ":\n";
       DILineInfo lastLine;
@@ -2194,8 +2293,19 @@ static void DisassembleInputMachO2(StringRef Filename, MachOObjectFile *MachOOF,
     }
     if (!symbolTableWorked) {
       // Reading the symbol table didn't work, disassemble the whole section.
-      uint64_t SectAddress = Sections[SectIdx].getAddress();
-      uint64_t SectSize = Sections[SectIdx].getSize();
+      uint64_t SectAddress;
+      std::error_code EC = Sections[SectIdx].getAddress(SectAddress);
+      if (EC) {
+        errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+        return;
+      }
+      uint64_t SectSize;
+      EC = Sections[SectIdx].getSize(SectSize);
+      if (EC) {
+        errs() << "llvm-objdump: " << Filename << ": " << EC.message() << '\n';
+        return;
+      }
+
       uint64_t InstSize;
       for (uint64_t Index = 0; Index < SectSize; Index += InstSize) {
         MCInst Inst;
@@ -2323,7 +2433,10 @@ static void findUnwindRelocNameAddend(const MachOObjectFile *Obj,
   auto RE = Obj->getRelocation(Reloc.getRawDataRefImpl());
   SectionRef RelocSection = Obj->getRelocationSection(RE);
 
-  uint64_t SectionAddr = RelocSection.getAddress();
+  uint64_t SectionAddr;
+  std::error_code EC = RelocSection.getAddress(SectionAddr);
+  if (EC)
+    report_fatal_error(EC.message());
 
   auto Sym = Symbols.upper_bound(Addr);
   if (Sym == Symbols.begin()) {
@@ -4207,128 +4320,183 @@ static void PrintLoadCommands(const MachOObjectFile *Obj, uint32_t ncmds,
   if (ncmds == 0)
     return;
   StringRef Buf = Obj->getData();
-  MachOObjectFile::LoadCommandInfo Command = Obj->getFirstLoadCommandInfo();
+  auto Command = Obj->getFirstLoadCommandInfo();
+  if (std::error_code EC = Command.getError())
+    report_fatal_error(EC.message());
+
   for (unsigned i = 0;; ++i) {
     outs() << "Load command " << i << "\n";
-    if (Command.C.cmd == MachO::LC_SEGMENT) {
-      MachO::segment_command SLC = Obj->getSegmentLoadCommand(Command);
-      const char *sg_segname = SLC.segname;
-      PrintSegmentCommand(SLC.cmd, SLC.cmdsize, SLC.segname, SLC.vmaddr,
-                          SLC.vmsize, SLC.fileoff, SLC.filesize, SLC.maxprot,
-                          SLC.initprot, SLC.nsects, SLC.flags, Buf.size(),
-                          verbose);
-      for (unsigned j = 0; j < SLC.nsects; j++) {
-        MachO::section S = Obj->getSection(Command, j);
-        PrintSection(S.sectname, S.segname, S.addr, S.size, S.offset, S.align,
-                     S.reloff, S.nreloc, S.flags, S.reserved1, S.reserved2,
-                     SLC.cmd, sg_segname, filetype, Buf.size(), verbose);
+    if (Command->C.cmd == MachO::LC_SEGMENT) {
+      auto SLC = Obj->getSegmentLoadCommand(*Command);
+      if (std::error_code EC = SLC.getError())
+        report_fatal_error(EC.message());
+      const char *sg_segname = SLC->segname;
+      PrintSegmentCommand(SLC->cmd, SLC->cmdsize, SLC->segname, SLC->vmaddr,
+                          SLC->vmsize, SLC->fileoff, SLC->filesize,
+                          SLC->maxprot, SLC->initprot, SLC->nsects, SLC->flags,
+                          Buf.size(), verbose);
+      for (unsigned j = 0; j < SLC->nsects; j++) {
+        auto S = Obj->getSection(*Command, j);
+        if (std::error_code EC = S.getError())
+          report_fatal_error(EC.message());
+        PrintSection(S->sectname, S->segname, S->addr, S->size, S->offset,
+                     S->align, S->reloff, S->nreloc, S->flags, S->reserved1,
+                     S->reserved2, SLC->cmd, sg_segname, filetype, Buf.size(),
+                     verbose);
       }
-    } else if (Command.C.cmd == MachO::LC_SEGMENT_64) {
-      MachO::segment_command_64 SLC_64 = Obj->getSegment64LoadCommand(Command);
-      const char *sg_segname = SLC_64.segname;
-      PrintSegmentCommand(SLC_64.cmd, SLC_64.cmdsize, SLC_64.segname,
-                          SLC_64.vmaddr, SLC_64.vmsize, SLC_64.fileoff,
-                          SLC_64.filesize, SLC_64.maxprot, SLC_64.initprot,
-                          SLC_64.nsects, SLC_64.flags, Buf.size(), verbose);
-      for (unsigned j = 0; j < SLC_64.nsects; j++) {
-        MachO::section_64 S_64 = Obj->getSection64(Command, j);
-        PrintSection(S_64.sectname, S_64.segname, S_64.addr, S_64.size,
-                     S_64.offset, S_64.align, S_64.reloff, S_64.nreloc,
-                     S_64.flags, S_64.reserved1, S_64.reserved2, SLC_64.cmd,
+    } else if (Command->C.cmd == MachO::LC_SEGMENT_64) {
+      auto SLC_64 = Obj->getSegment64LoadCommand(*Command);
+      if (std::error_code EC = SLC_64.getError())
+        report_fatal_error(EC.message());
+      const char *sg_segname = SLC_64->segname;
+      PrintSegmentCommand(SLC_64->cmd, SLC_64->cmdsize, SLC_64->segname,
+                          SLC_64->vmaddr, SLC_64->vmsize, SLC_64->fileoff,
+                          SLC_64->filesize, SLC_64->maxprot, SLC_64->initprot,
+                          SLC_64->nsects, SLC_64->flags, Buf.size(), verbose);
+      for (unsigned j = 0; j < SLC_64->nsects; j++) {
+        auto S_64 = Obj->getSection64(*Command, j);
+        if (std::error_code EC = S_64.getError())
+          report_fatal_error(EC.message());
+        PrintSection(S_64->sectname, S_64->segname, S_64->addr, S_64->size,
+                     S_64->offset, S_64->align, S_64->reloff, S_64->nreloc,
+                     S_64->flags, S_64->reserved1, S_64->reserved2, SLC_64->cmd,
                      sg_segname, filetype, Buf.size(), verbose);
       }
-    } else if (Command.C.cmd == MachO::LC_SYMTAB) {
-      MachO::symtab_command Symtab = Obj->getSymtabLoadCommand();
-      PrintSymtabLoadCommand(Symtab, Obj->is64Bit(), Buf.size());
-    } else if (Command.C.cmd == MachO::LC_DYSYMTAB) {
-      MachO::dysymtab_command Dysymtab = Obj->getDysymtabLoadCommand();
-      MachO::symtab_command Symtab = Obj->getSymtabLoadCommand();
-      PrintDysymtabLoadCommand(Dysymtab, Symtab.nsyms, Buf.size(),
+    } else if (Command->C.cmd == MachO::LC_SYMTAB) {
+      auto Symtab = Obj->getSymtabLoadCommand();
+      if (std::error_code EC = Symtab.getError())
+        report_fatal_error(EC.message());
+      PrintSymtabLoadCommand(*Symtab, Obj->is64Bit(), Buf.size());
+    } else if (Command->C.cmd == MachO::LC_DYSYMTAB) {
+      auto Dysymtab = Obj->getDysymtabLoadCommand();
+      if (std::error_code EC = Dysymtab.getError())
+        report_fatal_error(EC.message());
+      auto Symtab = Obj->getSymtabLoadCommand();
+      if (std::error_code EC = Symtab.getError())
+        report_fatal_error(EC.message());
+      PrintDysymtabLoadCommand(*Dysymtab, Symtab->nsyms, Buf.size(),
                                Obj->is64Bit());
-    } else if (Command.C.cmd == MachO::LC_DYLD_INFO ||
-               Command.C.cmd == MachO::LC_DYLD_INFO_ONLY) {
-      MachO::dyld_info_command DyldInfo = Obj->getDyldInfoLoadCommand(Command);
-      PrintDyldInfoLoadCommand(DyldInfo, Buf.size());
-    } else if (Command.C.cmd == MachO::LC_LOAD_DYLINKER ||
-               Command.C.cmd == MachO::LC_ID_DYLINKER ||
-               Command.C.cmd == MachO::LC_DYLD_ENVIRONMENT) {
-      MachO::dylinker_command Dyld = Obj->getDylinkerCommand(Command);
-      PrintDyldLoadCommand(Dyld, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_UUID) {
-      MachO::uuid_command Uuid = Obj->getUuidCommand(Command);
-      PrintUuidLoadCommand(Uuid);
-    } else if (Command.C.cmd == MachO::LC_RPATH) {
-      MachO::rpath_command Rpath = Obj->getRpathCommand(Command);
-      PrintRpathLoadCommand(Rpath, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_VERSION_MIN_MACOSX ||
-               Command.C.cmd == MachO::LC_VERSION_MIN_IPHONEOS) {
-      MachO::version_min_command Vd = Obj->getVersionMinLoadCommand(Command);
-      PrintVersionMinLoadCommand(Vd);
-    } else if (Command.C.cmd == MachO::LC_SOURCE_VERSION) {
-      MachO::source_version_command Sd = Obj->getSourceVersionCommand(Command);
-      PrintSourceVersionCommand(Sd);
-    } else if (Command.C.cmd == MachO::LC_MAIN) {
-      MachO::entry_point_command Ep = Obj->getEntryPointCommand(Command);
-      PrintEntryPointCommand(Ep);
-    } else if (Command.C.cmd == MachO::LC_ENCRYPTION_INFO) {
-      MachO::encryption_info_command Ei = Obj->getEncryptionInfoCommand(Command);
-      PrintEncryptionInfoCommand(Ei, Buf.size());
-    } else if (Command.C.cmd == MachO::LC_ENCRYPTION_INFO_64) {
-      MachO::encryption_info_command_64 Ei = Obj->getEncryptionInfoCommand64(Command);
-      PrintEncryptionInfoCommand64(Ei, Buf.size());
-    } else if (Command.C.cmd == MachO::LC_LINKER_OPTION) {
-      MachO::linker_option_command Lo = Obj->getLinkerOptionLoadCommand(Command);
-      PrintLinkerOptionCommand(Lo, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_SUB_FRAMEWORK) {
-      MachO::sub_framework_command Sf = Obj->getSubFrameworkCommand(Command);
-      PrintSubFrameworkCommand(Sf, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_SUB_UMBRELLA) {
-      MachO::sub_umbrella_command Sf = Obj->getSubUmbrellaCommand(Command);
-      PrintSubUmbrellaCommand(Sf, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_SUB_LIBRARY) {
-      MachO::sub_library_command Sl = Obj->getSubLibraryCommand(Command);
-      PrintSubLibraryCommand(Sl, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_SUB_CLIENT) {
-      MachO::sub_client_command Sc = Obj->getSubClientCommand(Command);
-      PrintSubClientCommand(Sc, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_ROUTINES) {
-      MachO::routines_command Rc = Obj->getRoutinesCommand(Command);
-      PrintRoutinesCommand(Rc);
-    } else if (Command.C.cmd == MachO::LC_ROUTINES_64) {
-      MachO::routines_command_64 Rc = Obj->getRoutinesCommand64(Command);
-      PrintRoutinesCommand64(Rc);
-    } else if (Command.C.cmd == MachO::LC_THREAD ||
-               Command.C.cmd == MachO::LC_UNIXTHREAD) {
-      MachO::thread_command Tc = Obj->getThreadCommand(Command);
-      PrintThreadCommand(Tc, Command.Ptr, Obj->isLittleEndian(), cputype);
-    } else if (Command.C.cmd == MachO::LC_LOAD_DYLIB ||
-               Command.C.cmd == MachO::LC_ID_DYLIB ||
-               Command.C.cmd == MachO::LC_LOAD_WEAK_DYLIB ||
-               Command.C.cmd == MachO::LC_REEXPORT_DYLIB ||
-               Command.C.cmd == MachO::LC_LAZY_LOAD_DYLIB ||
-               Command.C.cmd == MachO::LC_LOAD_UPWARD_DYLIB) {
-      MachO::dylib_command Dl = Obj->getDylibIDLoadCommand(Command);
-      PrintDylibCommand(Dl, Command.Ptr);
-    } else if (Command.C.cmd == MachO::LC_CODE_SIGNATURE ||
-               Command.C.cmd == MachO::LC_SEGMENT_SPLIT_INFO ||
-               Command.C.cmd == MachO::LC_FUNCTION_STARTS ||
-               Command.C.cmd == MachO::LC_DATA_IN_CODE ||
-               Command.C.cmd == MachO::LC_DYLIB_CODE_SIGN_DRS ||
-               Command.C.cmd == MachO::LC_LINKER_OPTIMIZATION_HINT) {
-      MachO::linkedit_data_command Ld =
-          Obj->getLinkeditDataLoadCommand(Command);
-      PrintLinkEditDataCommand(Ld, Buf.size());
+    } else if (Command->C.cmd == MachO::LC_DYLD_INFO ||
+               Command->C.cmd == MachO::LC_DYLD_INFO_ONLY) {
+      auto DyldInfo = Obj->getDyldInfoLoadCommand(*Command);
+      if (std::error_code EC = DyldInfo.getError())
+        report_fatal_error(EC.message());
+      PrintDyldInfoLoadCommand(*DyldInfo, Buf.size());
+    } else if (Command->C.cmd == MachO::LC_LOAD_DYLINKER ||
+               Command->C.cmd == MachO::LC_ID_DYLINKER ||
+               Command->C.cmd == MachO::LC_DYLD_ENVIRONMENT) {
+      auto Dyld = Obj->getDylinkerCommand(*Command);
+      if (std::error_code EC = Dyld.getError())
+        report_fatal_error(EC.message());
+      PrintDyldLoadCommand(*Dyld, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_UUID) {
+      auto Uuid = Obj->getUuidCommand(*Command);
+      if (std::error_code EC = Uuid.getError())
+        report_fatal_error(EC.message());
+      PrintUuidLoadCommand(*Uuid);
+    } else if (Command->C.cmd == MachO::LC_RPATH) {
+      auto Rpath = Obj->getRpathCommand(*Command);
+      if (std::error_code EC = Rpath.getError())
+        report_fatal_error(EC.message());
+      PrintRpathLoadCommand(*Rpath, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_VERSION_MIN_MACOSX ||
+               Command->C.cmd == MachO::LC_VERSION_MIN_IPHONEOS) {
+      auto Vd = Obj->getVersionMinLoadCommand(*Command);
+      if (std::error_code EC = Vd.getError())
+        report_fatal_error(EC.message());
+      PrintVersionMinLoadCommand(*Vd);
+    } else if (Command->C.cmd == MachO::LC_SOURCE_VERSION) {
+      auto Sd = Obj->getSourceVersionCommand(*Command);
+      if (std::error_code EC = Sd.getError())
+        report_fatal_error(EC.message());
+      PrintSourceVersionCommand(*Sd);
+    } else if (Command->C.cmd == MachO::LC_MAIN) {
+      auto Ep = Obj->getEntryPointCommand(*Command);
+      if (std::error_code EC = Ep.getError())
+        report_fatal_error(EC.message());
+      PrintEntryPointCommand(*Ep);
+    } else if (Command->C.cmd == MachO::LC_ENCRYPTION_INFO) {
+      auto Ei = Obj->getEncryptionInfoCommand(*Command);
+      if (std::error_code EC = Ei.getError())
+        report_fatal_error(EC.message());
+      PrintEncryptionInfoCommand(*Ei, Buf.size());
+    } else if (Command->C.cmd == MachO::LC_ENCRYPTION_INFO_64) {
+      auto Ei = Obj->getEncryptionInfoCommand64(*Command);
+      if (std::error_code EC = Ei.getError())
+        report_fatal_error(EC.message());
+      PrintEncryptionInfoCommand64(*Ei, Buf.size());
+    } else if (Command->C.cmd == MachO::LC_LINKER_OPTION) {
+      auto Lo = Obj->getLinkerOptionLoadCommand(*Command);
+      if (std::error_code EC = Lo.getError())
+        report_fatal_error(EC.message());
+      PrintLinkerOptionCommand(*Lo, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_SUB_FRAMEWORK) {
+      auto Sf = Obj->getSubFrameworkCommand(*Command);
+      if (std::error_code EC = Sf.getError())
+        report_fatal_error(EC.message());
+      PrintSubFrameworkCommand(*Sf, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_SUB_UMBRELLA) {
+      auto Sf = Obj->getSubUmbrellaCommand(*Command);
+      if (std::error_code EC = Sf.getError())
+        report_fatal_error(EC.message());
+      PrintSubUmbrellaCommand(*Sf, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_SUB_LIBRARY) {
+      auto Sl = Obj->getSubLibraryCommand(*Command);
+      if (std::error_code EC = Sl.getError())
+        report_fatal_error(EC.message());
+      PrintSubLibraryCommand(*Sl, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_SUB_CLIENT) {
+      auto Sc = Obj->getSubClientCommand(*Command);
+      if (std::error_code EC = Sc.getError())
+        report_fatal_error(EC.message());
+      PrintSubClientCommand(*Sc, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_ROUTINES) {
+      auto Rc = Obj->getRoutinesCommand(*Command);
+      if (std::error_code EC = Rc.getError())
+        report_fatal_error(EC.message());
+      PrintRoutinesCommand(*Rc);
+    } else if (Command->C.cmd == MachO::LC_ROUTINES_64) {
+      auto Rc = Obj->getRoutinesCommand64(*Command);
+      if (std::error_code EC = Rc.getError())
+        report_fatal_error(EC.message());
+      PrintRoutinesCommand64(*Rc);
+    } else if (Command->C.cmd == MachO::LC_THREAD ||
+               Command->C.cmd == MachO::LC_UNIXTHREAD) {
+      auto Tc = Obj->getThreadCommand(*Command);
+      if (std::error_code EC = Tc.getError())
+        report_fatal_error(EC.message());
+      PrintThreadCommand(*Tc, Command->Ptr, Obj->isLittleEndian(), cputype);
+    } else if (Command->C.cmd == MachO::LC_LOAD_DYLIB ||
+               Command->C.cmd == MachO::LC_ID_DYLIB ||
+               Command->C.cmd == MachO::LC_LOAD_WEAK_DYLIB ||
+               Command->C.cmd == MachO::LC_REEXPORT_DYLIB ||
+               Command->C.cmd == MachO::LC_LAZY_LOAD_DYLIB ||
+               Command->C.cmd == MachO::LC_LOAD_UPWARD_DYLIB) {
+      auto Dl = Obj->getDylibIDLoadCommand(*Command);
+      if (std::error_code EC = Dl.getError())
+        report_fatal_error(EC.message());
+      PrintDylibCommand(*Dl, Command->Ptr);
+    } else if (Command->C.cmd == MachO::LC_CODE_SIGNATURE ||
+               Command->C.cmd == MachO::LC_SEGMENT_SPLIT_INFO ||
+               Command->C.cmd == MachO::LC_FUNCTION_STARTS ||
+               Command->C.cmd == MachO::LC_DATA_IN_CODE ||
+               Command->C.cmd == MachO::LC_DYLIB_CODE_SIGN_DRS ||
+               Command->C.cmd == MachO::LC_LINKER_OPTIMIZATION_HINT) {
+      auto Ld = Obj->getLinkeditDataLoadCommand(*Command);
+      if (std::error_code EC = Ld.getError())
+        report_fatal_error(EC.message());
+      PrintLinkEditDataCommand(*Ld, Buf.size());
     } else {
-      outs() << "      cmd ?(" << format("0x%08" PRIx32, Command.C.cmd)
+      outs() << "      cmd ?(" << format("0x%08" PRIx32, Command->C.cmd)
              << ")\n";
-      outs() << "  cmdsize " << Command.C.cmdsize << "\n";
+      outs() << "  cmdsize " << Command->C.cmdsize << "\n";
       // TODO: get and print the raw bytes of the load command.
     }
     // TODO: print all the other kinds of load commands.
     if (i == ncmds - 1)
       break;
     else
-      Command = Obj->getNextLoadCommandInfo(Command);
+      Command = Obj->getNextLoadCommandInfo(*Command);
   }
 }
 
@@ -4460,8 +4628,12 @@ SegInfo::SegInfo(const object::MachOObjectFile *Obj) {
     SectionInfo Info;
     if (error(Section.getName(Info.SectionName)))
       return;
-    Info.Address = Section.getAddress();
-    Info.Size = Section.getSize();
+    std::error_code EC = Section.getAddress(Info.Address);
+    if (EC)
+      report_fatal_error(EC.message());
+    EC = Section.getSize(Info.Size);
+    if (EC)
+      report_fatal_error(EC.message());
     Info.SegmentName =
         Obj->getSectionFinalSegmentName(Section.getRawDataRefImpl());
     if (!Info.SegmentName.equals(CurSegName)) {

@@ -188,8 +188,18 @@ static void dumpVTables(const ObjectFile *Obj) {
     uint64_t SymAddress, SymSize;
     if (error(Sym.getAddress(SymAddress)) || error(Sym.getSize(SymSize)))
       return;
-    uint64_t SecAddress = Sec.getAddress();
-    uint64_t SecSize = Sec.getSize();
+    uint64_t SecAddress;
+    std::error_code EC = Sec.getAddress(SecAddress);
+    if (EC) {
+      errs() << "error: " << EC.message() << "\n";
+      return;
+    }
+    uint64_t SecSize;
+    EC = Sec.getSize(SecSize);
+    if (EC) {
+      errs() << "error: " << EC.message() << "\n";
+      return;
+    }
     uint64_t SymOffset = SymAddress - SecAddress;
     StringRef SymContents = SecContents.substr(SymOffset, SymSize);
 

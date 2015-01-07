@@ -130,7 +130,11 @@ static std::error_code getOffset(const SymbolRef &Sym, uint64_t &Result) {
     return object_error::success;
   }
 
-  uint64_t SectionAddress = SecI->getAddress();
+  uint64_t SectionAddress;
+  std::error_code EC = SecI->getAddress(SectionAddress);
+  if (EC)
+    report_fatal_error(EC.message());
+
   Result = Address - SectionAddress;
   return object_error::success;
 }
@@ -172,8 +176,10 @@ RuntimeDyldImpl::loadObjectImpl(const object::ObjectFile &Obj) {
     Check(I->getType(SymType));
     Check(I->getName(Name));
 
-    uint32_t Flags = I->getFlags();
-
+    uint32_t Flags;
+    std::error_code EC = I->getFlags(Flags);
+    if (EC)
+      report_fatal_error(EC.message());
     bool IsCommon = Flags & SymbolRef::SF_Common;
     if (IsCommon) {
       // Add the common symbols to a list.  We'll allocate them all below.
@@ -286,7 +292,10 @@ static bool isZeroInit(const SectionRef &Section) {
     return ELFObj->getSectionType(Section) == ELF::SHT_NOBITS;
 
   auto *MachO = cast<MachOObjectFile>(Obj);
-  unsigned SectionType = MachO->getSectionType(Section);
+  unsigned SectionType;
+  std::error_code EC = MachO->getSectionType(Section, SectionType);
+  if (EC)
+    report_fatal_error(EC.message());
   return SectionType == MachO::S_ZEROFILL ||
          SectionType == MachO::S_GB_ZEROFILL;
 }
@@ -314,8 +323,14 @@ void RuntimeDyldImpl::computeTotalAllocSize(const ObjectFile &Obj,
     // Consider only the sections that are required to be loaded for execution
     if (IsRequired) {
       StringRef Name;
-      uint64_t DataSize = Section.getSize();
-      uint64_t Alignment64 = Section.getAlignment();
+      uint64_t DataSize;
+      std::error_code EC = Section.getSize(DataSize);
+      if (EC)
+        report_fatal_error(EC.message());
+      uint64_t Alignment64;
+      EC = Section.getAlignment(Alignment64);
+      if (EC)
+        report_fatal_error(EC.message());
       bool IsCode = Section.isText();
       bool IsReadOnly = isReadOnlyData(Section);
       Check(Section.getName(Name));
@@ -353,7 +368,10 @@ void RuntimeDyldImpl::computeTotalAllocSize(const ObjectFile &Obj,
   uint64_t CommonSize = 0;
   for (symbol_iterator I = Obj.symbol_begin(), E = Obj.symbol_end(); I != E;
        ++I) {
-    uint32_t Flags = I->getFlags();
+    uint32_t Flags;
+    std::error_code EC = I->getFlags(Flags);
+    if (EC)
+      report_fatal_error(EC.message());
     if (Flags & SymbolRef::SF_Common) {
       // Add the common symbols to a list.  We'll allocate them all below.
       uint64_t Size = 0;
@@ -399,8 +417,14 @@ unsigned RuntimeDyldImpl::computeSectionStubBufSize(const ObjectFile &Obj,
   }
 
   // Get section data size and alignment
-  uint64_t DataSize = Section.getSize();
-  uint64_t Alignment64 = Section.getAlignment();
+  uint64_t DataSize;
+  std::error_code EC = Section.getSize(DataSize);
+  if (EC)
+    report_fatal_error(EC.message());
+  uint64_t Alignment64;
+  EC = Section.getAlignment(Alignment64);
+  if (EC)
+    report_fatal_error(EC.message());
 
   // Add stubbuf size alignment
   unsigned Alignment = (unsigned)Alignment64 & 0xffffffffL;
@@ -484,7 +508,10 @@ unsigned RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
 
   StringRef data;
   Check(Section.getContents(data));
-  uint64_t Alignment64 = Section.getAlignment();
+  uint64_t Alignment64;
+  std::error_code EC = Section.getAlignment(Alignment64);
+  if (EC)
+    report_fatal_error(EC.message());
 
   unsigned Alignment = (unsigned)Alignment64 & 0xffffffffL;
   unsigned PaddingSize = 0;
@@ -494,7 +521,10 @@ unsigned RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
   bool IsVirtual = Section.isVirtual();
   bool IsZeroInit = isZeroInit(Section);
   bool IsReadOnly = isReadOnlyData(Section);
-  uint64_t DataSize = Section.getSize();
+  uint64_t DataSize;
+  EC = Section.getSize(DataSize);
+  if (EC)
+    report_fatal_error(EC.message());
   Check(Section.getName(Name));
 
   StubBufSize = computeSectionStubBufSize(Obj, Section);

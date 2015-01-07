@@ -293,28 +293,32 @@ static void getSection(const MachOObjectFile *Obj,
                        DataRefImpl Sec,
                        MachOSection &Section) {
   if (!Obj->is64Bit()) {
-    MachO::section Sect = Obj->getSection(Sec);
-    Section.Address     = Sect.addr;
-    Section.Size        = Sect.size;
-    Section.Offset      = Sect.offset;
-    Section.Alignment   = Sect.align;
-    Section.RelocationTableOffset = Sect.reloff;
-    Section.NumRelocationTableEntries = Sect.nreloc;
-    Section.Flags       = Sect.flags;
-    Section.Reserved1   = Sect.reserved1;
-    Section.Reserved2   = Sect.reserved2;
+    auto Sect = Obj->getSection(Sec);
+    if (std::error_code EC = Sect.getError())
+      report_fatal_error(EC.message());
+    Section.Address     = Sect->addr;
+    Section.Size        = Sect->size;
+    Section.Offset      = Sect->offset;
+    Section.Alignment   = Sect->align;
+    Section.RelocationTableOffset = Sect->reloff;
+    Section.NumRelocationTableEntries = Sect->nreloc;
+    Section.Flags       = Sect->flags;
+    Section.Reserved1   = Sect->reserved1;
+    Section.Reserved2   = Sect->reserved2;
     return;
   }
-  MachO::section_64 Sect = Obj->getSection64(Sec);
-  Section.Address     = Sect.addr;
-  Section.Size        = Sect.size;
-  Section.Offset      = Sect.offset;
-  Section.Alignment   = Sect.align;
-  Section.RelocationTableOffset = Sect.reloff;
-  Section.NumRelocationTableEntries = Sect.nreloc;
-  Section.Flags       = Sect.flags;
-  Section.Reserved1   = Sect.reserved1;
-  Section.Reserved2   = Sect.reserved2;
+  auto Sect = Obj->getSection64(Sec);
+  if (std::error_code EC = Sect.getError())
+    report_fatal_error(EC.message());
+  Section.Address     = Sect->addr;
+  Section.Size        = Sect->size;
+  Section.Offset      = Sect->offset;
+  Section.Alignment   = Sect->align;
+  Section.RelocationTableOffset = Sect->reloff;
+  Section.NumRelocationTableEntries = Sect->nreloc;
+  Section.Flags       = Sect->flags;
+  Section.Reserved1   = Sect->reserved1;
+  Section.Reserved2   = Sect->reserved2;
 }
 
 
@@ -322,20 +326,24 @@ static void getSymbol(const MachOObjectFile *Obj,
                       DataRefImpl DRI,
                       MachOSymbol &Symbol) {
   if (!Obj->is64Bit()) {
-    MachO::nlist Entry = Obj->getSymbolTableEntry(DRI);
-    Symbol.StringIndex  = Entry.n_strx;
-    Symbol.Type         = Entry.n_type;
-    Symbol.SectionIndex = Entry.n_sect;
-    Symbol.Flags        = Entry.n_desc;
-    Symbol.Value        = Entry.n_value;
+    auto Entry = Obj->getSymbolTableEntry(DRI);
+    if (std::error_code EC = Entry.getError())
+      report_fatal_error(EC.message());
+    Symbol.StringIndex  = Entry->n_strx;
+    Symbol.Type         = Entry->n_type;
+    Symbol.SectionIndex = Entry->n_sect;
+    Symbol.Flags        = Entry->n_desc;
+    Symbol.Value        = Entry->n_value;
     return;
   }
-  MachO::nlist_64 Entry = Obj->getSymbol64TableEntry(DRI);
-  Symbol.StringIndex  = Entry.n_strx;
-  Symbol.Type         = Entry.n_type;
-  Symbol.SectionIndex = Entry.n_sect;
-  Symbol.Flags        = Entry.n_desc;
-  Symbol.Value        = Entry.n_value;
+  auto Entry = Obj->getSymbol64TableEntry(DRI);
+  if (std::error_code EC = Entry.getError())
+    report_fatal_error(EC.message());
+  Symbol.StringIndex  = Entry->n_strx;
+  Symbol.Type         = Entry->n_type;
+  Symbol.SectionIndex = Entry->n_sect;
+  Symbol.Flags        = Entry->n_desc;
+  Symbol.Value        = Entry->n_value;
 }
 
 void MachODumper::printFileHeaders() {

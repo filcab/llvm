@@ -333,7 +333,11 @@ struct SectionData {
   std::error_code load(SectionRef &Section) {
     if (auto Err = Section.getContents(Data))
       return Err;
-    Address = Section.getAddress();
+    if (std::error_code EC = Section.getAddress(Address))
+      // TODO: Is this the proper way to handle it?
+      // The file is malformed and we couldn't read the sections properly
+      // Bail out, for now. We might be able to recover in some cases.
+      report_fatal_error(EC.message());
     return instrprof_error::success;
   }
 

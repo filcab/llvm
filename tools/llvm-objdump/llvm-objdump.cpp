@@ -311,8 +311,15 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
     if (!Section.isText() || Section.isVirtual())
       continue;
 
-    uint64_t SectionAddr = Section.getAddress();
-    uint64_t SectSize = Section.getSize();
+    uint64_t SectionAddr;
+    EC = Section.getAddress(SectionAddr);
+    if (EC)
+      report_fatal_error(EC.message());
+    uint64_t SectSize;
+    EC = Section.getSize(SectSize);
+    if (EC)
+      report_fatal_error(EC.message());
+
     if (!SectSize)
       continue;
 
@@ -498,8 +505,16 @@ static void PrintSectionHeaders(const ObjectFile *Obj) {
     StringRef Name;
     if (error(Section.getName(Name)))
       return;
-    uint64_t Address = Section.getAddress();
-    uint64_t Size = Section.getSize();
+
+    uint64_t Address;
+    std::error_code EC = Section.getAddress(Address);
+    if (EC)
+      report_fatal_error(EC.message());
+    uint64_t Size;
+    EC = Section.getSize(Size);
+    if (EC)
+      report_fatal_error(EC.message());
+
     bool Text = Section.isText();
     bool Data = Section.isData();
     bool BSS = Section.isBSS();
@@ -518,8 +533,15 @@ static void PrintSectionContents(const ObjectFile *Obj) {
     StringRef Contents;
     if (error(Section.getName(Name)))
       continue;
-    uint64_t BaseAddr = Section.getAddress();
-    uint64_t Size = Section.getSize();
+
+    uint64_t BaseAddr;
+    std::error_code EC = Section.getAddress(BaseAddr);
+    if (EC)
+      report_fatal_error(EC.message());
+    uint64_t Size;
+    EC = Section.getSize(Size);
+    if (EC)
+      report_fatal_error(EC.message());
     if (!Size)
       continue;
 
@@ -626,7 +648,11 @@ static void PrintSymbolTable(const ObjectFile *o) {
     uint64_t Address;
     SymbolRef::Type Type;
     uint64_t Size;
-    uint32_t Flags = Symbol.getFlags();
+    uint32_t Flags;
+    std::error_code EC = Symbol.getFlags(Flags);
+    if (EC)
+      report_fatal_error(EC.message());
+
     section_iterator Section = o->section_end();
     if (error(Symbol.getName(Name)))
       continue;

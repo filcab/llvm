@@ -132,7 +132,11 @@ const char *LLVMGetSectionName(LLVMSectionIteratorRef SI) {
 }
 
 uint64_t LLVMGetSectionSize(LLVMSectionIteratorRef SI) {
-  return (*unwrap(SI))->getSize();
+  uint64_t Size;
+  std::error_code EC = (*unwrap(SI))->getSize(Size);
+  if (EC)
+    report_fatal_error(EC.message());
+  return Size;
 }
 
 const char *LLVMGetSectionContents(LLVMSectionIteratorRef SI) {
@@ -143,7 +147,11 @@ const char *LLVMGetSectionContents(LLVMSectionIteratorRef SI) {
 }
 
 uint64_t LLVMGetSectionAddress(LLVMSectionIteratorRef SI) {
-  return (*unwrap(SI))->getAddress();
+  uint64_t Addr;
+  std::error_code EC = (*unwrap(SI))->getAddress(Addr);
+  if (EC)
+    report_fatal_error(EC.message());
+  return Addr;
 }
 
 LLVMBool LLVMGetSectionContainsSymbol(LLVMSectionIteratorRef SI,
