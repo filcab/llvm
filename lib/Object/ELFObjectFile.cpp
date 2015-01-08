@@ -71,7 +71,7 @@ ObjectFile::createELFObjectFile(MemoryBufferRef Obj) {
       return object_error::parse_failed;
   }
   else
-    llvm_unreachable("Buffer is not an ELF object file!");
+    report_fatal_error("Buffer is not an ELF object file!");
 
   if (EC)
     return EC;
